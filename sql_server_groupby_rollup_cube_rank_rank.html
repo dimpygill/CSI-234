@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SQL Server Tutorial: GROUP BY, COALESCE, ROLLUP, CUBE, RANK & DENSE_RANK</title>
+<style>
+    :root {
+        --navy: #17324d;
+        --blue: #2b6cb0;
+        --light-blue: #eef6ff;
+        --border: #d7dee7;
+        --text: #202733;
+        --muted: #5d6875;
+        --green: #eaf7ef;
+        --yellow: #fff8df;
+        --purple: #f3efff;
+        --code: #f5f7fa;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        font-family: Arial, Helvetica, sans-serif;
+        color: var(--text);
+        line-height: 1.6;
+        background: #ffffff;
+    }
+    header {
+        background: linear-gradient(135deg, #17324d, #285d88);
+        color: white;
+        padding: 48px 24px;
+    }
+    header .wrap, main { max-width: 1050px; margin: auto; }
+    h1 { margin: 0 0 12px; font-size: 36px; }
+    h2 {
+        color: var(--navy);
+        border-bottom: 2px solid var(--border);
+        padding-bottom: 8px;
+        margin-top: 50px;
+    }
+    h3 { color: var(--blue); margin-top: 30px; }
+    h4 { color: var(--navy); }
+    .subtitle { font-size: 18px; opacity: .92; max-width: 850px; }
+    main { padding: 20px 24px 70px; }
+    .toc {
+        background: var(--light-blue);
+        border: 1px solid #cfe2f7;
+        padding: 22px 28px;
+        border-radius: 10px;
+        margin: 25px 0 35px;
+    }
+    .toc a { color: var(--blue); text-decoration: none; }
+    .toc li { margin: 6px 0; }
+    .concept {
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 22px;
+        margin: 22px 0;
+        box-shadow: 0 2px 6px rgba(0,0,0,.04);
+    }
+    .note, .warning, .tip {
+        padding: 15px 18px;
+        border-radius: 8px;
+        margin: 18px 0;
+    }
+    .note { background: var(--light-blue); border-left: 5px solid var(--blue); }
+    .warning { background: var(--yellow); border-left: 5px solid #d69e2e; }
+    .tip { background: var(--green); border-left: 5px solid #38a169; }
+    pre {
+        background: var(--code);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 17px;
+        overflow-x: auto;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+    code { font-family: Consolas, "Courier New", monospace; }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 18px 0 25px;
+        font-size: 15px;
+    }
+    th, td {
+        border: 1px solid var(--border);
+        padding: 10px 12px;
+        text-align: left;
+        vertical-align: top;
+    }
+    th { background: #edf2f7; color: var(--navy); }
+    .diagram {
+        background: #fafbfc;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 18px;
+        margin: 18px 0;
+        font-family: Consolas, monospace;
+        white-space: pre-wrap;
+    }
+    .pill {
+        display: inline-block;
+        background: #e8f1fb;
+        color: #205a8e;
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 13px;
+        margin-right: 5px;
+    }
+    .question {
+        background: var(--purple);
+        border: 1px solid #d8ccff;
+        border-radius: 8px;
+        padding: 16px;
+        margin: 14px 0;
+    }
+    .answer {
+        background: #fafafa;
+        border-left: 4px solid #777;
+        padding: 12px 16px;
+        margin: 10px 0 22px;
+    }
+    .small { color: var(--muted); font-size: 14px; }
+    .key { font-weight: bold; color: var(--navy); }
+    footer {
+        background: #f3f5f7;
+        border-top: 1px solid var(--border);
+        padding: 25px;
+        text-align: center;
+        color: var(--muted);
+    }
+</style>
+</head>
+
+<body>
+<header>
+<div class="wrap">
+    <h1>SQL Server: GROUP BY, COALESCE, ROLLUP, CUBE, RANK &amp; DENSE_RANK</h1>
+
+</div>
+</header>
+
+<main>
+
+<div class="toc">
+    <strong>Learning path</strong>
+    <ol>
+        <li><a href="#setup">One small dataset we will use throughout</a></li>
+        <li><a href="#groupby">GROUP BY — make groups and calculate summaries</a></li>
+        <li><a href="#coalesce">COALESCE — replace NULL with a value</a></li>
+        <li><a href="#rollup">ROLLUP — add subtotals and a grand total</a></li>
+        <li><a href="#cube">CUBE — calculate every useful combination of dimensions</a></li>
+        <li><a href="#compare">ROLLUP vs CUBE — now compare them</a></li>
+        <li><a href="#grouping">GROUPING and GROUPING_ID — identify subtotal rows</a></li>
+        <li><a href="#rank">RANK — assign positions while preserving ties</a></li>
+        <li><a href="#dense">DENSE_RANK — rank without gaps after ties</a></li>
+        <li><a href="#rankcompare">RANK vs DENSE_RANK — compare after learning both</a></li>
+        <li><a href="#practice">Practice questions</a></li>
+        <li><a href="#cheatsheet">Quick reference</a></li>
+    </ol>
+</div>
+
+<section id="setup">
+<h2>1. One small dataset we will use throughout</h2>
+
+<p>Imagine a company has sales in several regions. Each sale has:</p>
+<ul>
+    <li><strong>Region</strong> — where the sale happened</li>
+    <li><strong>Salesperson</strong> — who made the sale</li>
+    <li><strong>Product</strong> — what was sold</li>
+    <li><strong>SalesAmount</strong> — the amount of the sale</li>
+</ul>
+
+<p>For the examples below, we can create a temporary SQL Server table:</p>
+
+<pre><code>CREATE TABLE #Sales
+(
+    Region       VARCHAR(20),
+    Salesperson  VARCHAR(30),
+    Product      VARCHAR(20),
+    SalesAmount  DECIMAL(10,2)
+);
+
+INSERT INTO #Sales (Region, Salesperson, Product, SalesAmount)
+VALUES
+('West', 'Alice', 'Laptop', 1200),
+('West', 'Alice', 'Mouse',    50),
+('West', 'Bob',   'Laptop', 1000),
+('West', 'Bob',   'Mouse',    40),
+('East', 'Carol', 'Laptop', 1300),
+('East', 'Carol', 'Mouse',    60),
+('East', 'David', 'Laptop', 1100),
+('East', 'David', 'Mouse',    45);
+
+SELECT *
+FROM #Sales;</code></pre>
+
+<table>
+<tr><th>Region</th><th>Salesperson</th><th>Product</th><th>SalesAmount</th></tr>
+<tr><td>West</td><td>Alice</td><td>Laptop</td><td>1200</td></tr>
+<tr><td>West</td><td>Alice</td><td>Mouse</td><td>50</td></tr>
+<tr><td>West</td><td>Bob</td><td>Laptop</td><td>1000</td></tr>
+<tr><td>West</td><td>Bob</td><td>Mouse</td><td>40</td></tr>
+<tr><td>East</td><td>Carol</td><td>Laptop</td><td>1300</td></tr>
+<tr><td>East</td><td>Carol</td><td>Mouse</td><td>60</td></tr>
+<tr><td>East</td><td>David</td><td>Laptop</td><td>1100</td></tr>
+<tr><td>East</td><td>David</td><td>Mouse</td><td>45</td></tr>
+</table>
+
+<div class="note">
+<strong>Important idea:</strong> We will use the same dataset repeatedly so that you can see
+how each SQL feature changes the question being asked. Do not memorize the syntax first.
+Understand what the database is being asked to calculate.
+</div>
+</section>
+
+<section id="groupby">
+<h2>2. GROUP BY — make groups and calculate summaries</h2>
+
+<h3>2.1 Why do we need GROUP BY?</h3>
+<p>
+Suppose we ask: <strong>How much did each region sell?</strong>
+There are many rows in the table, but we want one result row per region.
+That is exactly the kind of problem <code>GROUP BY</code> solves.
+</p>
+
+<pre><code>SELECT
+    Region,
+    SUM(SalesAmount) AS TotalSales
+FROM #Sales
+GROUP BY Region;</code></pre>
+
+<table>
+<tr><th>Region</th><th>TotalSales</th></tr>
+<tr><td>East</td><td>2505</td></tr>
+<tr><td>West</td><td>2290</td></tr>
+</table>
+
+<p>The database conceptually does this:</p>
+
+<div class="diagram">Original rows
+      |
+      v
++----------------+
+| Group by Region|
++----------------+
+      |
+      +---- East ----> 2505
+      |
+      +---- West ----> 2290</div>
+
+<h3>2.2 What is an aggregate function?</h3>
+<p>
+An <strong>aggregate function</strong> takes multiple rows and produces a summary value.
+Common examples are:
+</p>
+
+<table>
+<tr><th>Function</th><th>Meaning</th><th>Example</th></tr>
+<tr><td>SUM()</td><td>Add values</td><td>SUM(SalesAmount)</td></tr>
+<tr><td>AVG()</td><td>Calculate average</td><td>AVG(SalesAmount)</td></tr>
+<tr><td>COUNT()</td><td>Count rows/values</td><td>COUNT(*)</td></tr>
+<tr><td>MIN()</td><td>Smallest value</td><td>MIN(SalesAmount)</td></tr>
+<tr><td>MAX()</td><td>Largest value</td><td>MAX(SalesAmount)</td></tr>
+</table>
+
+<h3>2.3 GROUP BY can use more than one column</h3>
+<p>Now ask a more detailed question:</p>
+
+<p><strong>How much did each salesperson sell for each product?</strong></p>
+
+<pre><code>SELECT
+    Salesperson,
+    Product,
+    SUM(SalesAmount) AS TotalSales
+FROM #Sales
+GROUP BY
+    Salesperson,
+    Product;</code></pre>
+
+<p>
+Now the group is not just a salesperson. It is the combination
+<strong>(Salesperson, Product)</strong>.
+</p>
+
+<div class="diagram">Salesperson + Product
+        |
+        +--> Alice + Laptop
+        +--> Alice + Mouse
+        +--> Bob   + Laptop
+        +--> Bob   + Mouse
+        +--> Carol + Laptop
+        +--> Carol + Mouse
+        +--> David + Laptop
+        +--> David + Mouse</div>
+
+<div class="tip">
+<strong>Key mental model:</strong> GROUP BY controls the level of detail of the result.
+If you group by Region, you get one row per region.
+If you group by Region and Product, you get one row per region/product combination.
+</div>
+
+<h3>2.4 A common mistake</h3>
+<p>
+If a column appears in SELECT and is not inside an aggregate function,
+it generally needs to be included in GROUP BY.
+</p>
+
+<pre><code>-- Correct
+SELECT Region, SUM(SalesAmount)
+FROM #Sales
+GROUP BY Region;</code></pre>
+
+<p>This is not valid:</p>
+
+<pre><code>-- Invalid in SQL Server
+SELECT Region, Salesperson, SUM(SalesAmount)
+FROM #Sales
+GROUP BY Region;</code></pre>
+
+<p>
+Why? SQL Server would not know which single salesperson should be displayed
+for a region that contains several salespeople.
+</p>
+</section>
+
+<section id="coalesce">
+<h2>3. COALESCE — replace NULL with a value</h2>
+
+<h3>3.1 First understand NULL</h3>
+<p>
+<code>NULL</code> means the value is missing or unknown. It is not the same thing as
+zero, an empty string, or the word "NULL".
+</p>
+
+<pre><code>SELECT
+    COALESCE(NULL, 'Unknown') AS Result;</code></pre>
+
+<p>Result:</p>
+
+<table><tr><th>Result</th></tr><tr><td>Unknown</td></tr></table>
+
+<h3>3.2 What does COALESCE do?</h3>
+<p>
+<code>COALESCE</code> checks its arguments from left to right and returns the
+<strong>first non-NULL value</strong>.
+</p>
+
+<pre><code>SELECT
+    COALESCE(NULL, NULL, 'Hello', 'World') AS Result;</code></pre>
+
+<p>Result: <strong>Hello</strong>.</p>
+
+<p>Another example:</p>
+
+<pre><code>SELECT
+    COALESCE(PhoneNumber, 'No phone number')
+FROM Students;</code></pre>
+
+<p>
+If <code>PhoneNumber</code> is NULL, SQL Server displays
+<code>No phone number</code> instead.
+</p>
+
+<h3>3.3 COALESCE with GROUP BY results</h3>
+<p>
+This becomes especially important when we later use <code>ROLLUP</code> and
+<code>CUBE</code>, because those operations intentionally create NULLs to represent
+higher-level summary rows.
+</p>
+
+<p>For example, a ROLLUP result might contain:</p>
+
+<table>
+<tr><th>Region</th><th>Product</th><th>TotalSales</th></tr>
+<tr><td>East</td><td>Laptop</td><td>2400</td></tr>
+<tr><td>East</td><td>Mouse</td><td>105</td></tr>
+<tr><td>East</td><td>NULL</td><td>2505</td></tr>
+</table>
+
+<p>
+The NULL in Product does not necessarily mean that the product is unknown.
+Here it means: <strong>this row is the total for all products in East.</strong>
+</p>
+
+<p>You can make the output easier to read:</p>
+
+<pre><code>SELECT
+    Region,
+    COALESCE(Product, 'All Products') AS Product,
+    SUM(SalesAmount) AS TotalSales
+FROM #Sales
+GROUP BY ROLLUP (Region, Product);</code></pre>
+
+<div class="warning">
+<strong>Important:</strong> COALESCE changes how NULL is displayed; it does not tell you
+whether a NULL came from missing source data or from a subtotal generated by ROLLUP/CUBE.
+For that distinction, SQL Server provides GROUPING() and GROUPING_ID(), explained later.
+</div>
+</section>
+
+<section id="rollup">
+<h2>4. ROLLUP — add subtotals and a grand total</h2>
+
+<h3>4.1 Why do we need ROLLUP?</h3>
+<p>
+Ordinary GROUP BY gives us detailed groups. But reports often need several levels:
+</p>
+
+<div class="diagram">Region + Product totals
+        |
+        v
+East / Laptop
+East / Mouse
+West / Laptop
+West / Mouse
+
+Then subtotals:
+East / ALL PRODUCTS
+West / ALL PRODUCTS
+
+Then grand total:
+ALL REGIONS / ALL PRODUCTS</div>
+
+<p>
+<code>ROLLUP</code> is designed for this hierarchical type of report.
+</p>
+
+<h3>4.2 Basic ROLLUP syntax</h3>
+
+<pre><code>SELECT
+    Region,
+    Product,
+    SUM(SalesAmount) AS TotalSales
+FROM #Sales
+GROUP BY ROLLUP (Region, Product);</code></pre>
+
+<p>
+With <code>ROLLUP(Region, Product)</code>, SQL Server produces these levels:
+</p>
+
+<ol>
+    <li>Region + Product</li>
+    <li>Region subtotal</li>
+    <li>Grand total</li>
+</ol>
+
+<table>
+<tr><th>Region</th><th>Product</th><th>TotalSales</th><th>Meaning</th></tr>
+<tr><td>East</td><td>Laptop</td><td>2400</td><td>East + Laptop</td></tr>
+<tr><td>East</td><td>Mouse</td><td>105</td><td>East + Mouse</td></tr>
+<tr><td>East</td><td>NULL</td><td>2505</td><td>East subtotal</td></tr>
+<tr><td>West</td><td>Laptop</td><td>2200</td><td>West + Laptop</td></tr>
+<tr><td>West</td><td>Mouse</td><td>90</td><td>West + Mouse</td></tr>
+<tr><td>West</td><td>NULL</td><td>2290</td><td>West subtotal</td></tr>
+<tr><td>NULL</td><td>NULL</td><td>4795</td><td>Grand total</td></tr>
+</table>
+
+<h3>4.3 Why is it called ROLLUP?</h3>
+<p>
+Think of the report as moving upward through a hierarchy:
+</p>
+
+<div class="diagram">Detailed:
+Region + Product
+       |
+       v
+Roll up Product:
+Region
+       |
+       v
+Roll up Region:
+Grand Total</div>
+
+<p>
+The order matters. With <code>ROLLUP(Region, Product)</code>, Product is rolled up first,
+then Region.
+</p>
+
+<h3>4.4 ROLLUP with three columns</h3>
+
+<pre><code>GROUP BY ROLLUP (Region, Salesperson, Product)</code></pre>
+
+<p>Conceptually, the grouping levels are:</p>
+
+<table>
+<tr><th>Level</th><th>Grouping</th></tr>
+<tr><td>1</td><td>Region + Salesperson + Product</td></tr>
+<tr><td>2</td><td>Region + Salesperson</td></tr>
+<tr><td>3</td><td>Region</td></tr>
+<tr><td>4</td><td>Grand total</td></tr>
+</table>
+
+<div class="tip">
+<strong>Remember:</strong> ROLLUP is especially useful when your columns form a natural hierarchy,
+such as Year → Quarter → Month or Country → State → City.
+</div>
+</section>
+
+<section id="cube">
+<h2>5. CUBE — calculate every combination of dimensions</h2>
+
+<h3>5.1 Why do we need CUBE?</h3>
+<p>
+Now suppose management wants to analyze sales from every possible angle:
+</p>
+
+<ul>
+    <li>Region and Product</li>
+    <li>Region only</li>
+    <li>Product only</li>
+    <li>Everything combined</li>
+</ul>
+
+<p>
+This is where <code>CUBE</code> is useful.
+</p>
+
+<h3>5.2 Basic CUBE syntax</h3>
+
+<pre><code>SELECT
+    Region,
+    Product,
+    SUM(SalesAmount) AS TotalSales
+FROM #Sales
+GROUP BY CUBE (Region, Product);</code></pre>
+
+<p>
+For two grouping columns, CUBE produces every combination:
+</p>
+
+<table>
+<tr><th>Region</th><th>Product</th><th>Meaning</th></tr>
+<tr><td>East</td><td>Laptop</td><td>East + Laptop</td></tr>
+<tr><td>East</td><td>Mouse</td><td>East + Mouse</td></tr>
+<tr><td>West</td><td>Laptop</td><td>West + Laptop</td></tr>
+<tr><td>West</td><td>Mouse</td><td>West + Mouse</td></tr>
+<tr><td>East</td><td>NULL</td><td>East subtotal</td></tr>
+<tr><td>West</td><td>NULL</td><td>West subtotal</td></tr>
+<tr><td>NULL</td><td>Laptop</td><td>Laptop subtotal across all regions</td></tr>
+<tr><td>NULL</td><td>Mouse</td><td>Mouse subtotal across all regions</td></tr>
+<tr><td>NULL</td><td>NULL</td><td>Grand total</td></tr>
+</table>
+
+<h3>5.3 Think of CUBE as a set of questions</h3>
+
+<div class="diagram">CUBE(Region, Product)
+
+Question 1: What is East + Laptop?
+Question 2: What is East + Mouse?
+Question 3: What is West + Laptop?
+Question 4: What is West + Mouse?
+
+Question 5: What is East, regardless of Product?
+Question 6: What is West, regardless of Product?
+
+Question 7: What is Laptop, regardless of Region?
+Question 8: What is Mouse, regardless of Region?
+
+Question 9: What is the grand total?</div>
+
+<h3>5.4 CUBE with three columns</h3>
+
+<p>
+With three dimensions, CUBE produces <strong>2³ = 8 grouping combinations</strong>
+before considering the individual values within those combinations.
+</p>
+
+<pre><code>GROUP BY CUBE (Region, Salesperson, Product)</code></pre>
+
+<p>The grouping combinations are:</p>
+
+<table>
+<tr><th>Combination</th></tr>
+<tr><td>Region + Salesperson + Product</td></tr>
+<tr><td>Region + Salesperson</td></tr>
+<tr><td>Region + Product</td></tr>
+<tr><td>Salesperson + Product</td></tr>
+<tr><td>Region</td></tr>
+<tr><td>Salesperson</td></tr>
+<tr><td>Product</td></tr>
+<tr><td>Grand total</td></tr>
+</table>
+
+<div class="warning">
+<strong>Performance note:</strong> CUBE can produce many grouping combinations.
+As the number of dimensions increases, the number of combinations grows rapidly.
+Use it deliberately, especially on large datasets.
+</div>
+</section>
+
+<section id="compare">
+<h2>6. ROLLUP vs CUBE — compare them now</h2>
+
+<p>
+At this point we have learned both operations independently. Now the difference is much easier
+to understand.
+</p>
+
+<h3>6.1 The central difference</h3>
+
+<table>
+<tr><th>ROLLUP</th><th>CUBE</th></tr>
+<tr>
+<td>Creates hierarchical levels of aggregation.</td>
+<td>Creates every combination of the specified grouping columns.</td>
+</tr>
+<tr>
+<td>Useful when the dimensions have an order or hierarchy.</td>
+<td>Useful when you want analysis from multiple independent dimensions.</td>
+</tr>
+<tr>
+<td>ROLLUP(Region, Product) gives Region+Product, Region, Total.</td>
+<td>CUBE(Region, Product) gives Region+Product, Region, Product, Total.</td>
+</tr>
+<tr>
+<td>Fewer grouping combinations in many cases.</td>
+<td>More combinations; can create substantially more rows.</td>
+</tr>
+</table>
+
+<h3>6.2 Visual comparison</h3>
+
+<div class="diagram">ROLLUP(Region, Product)
+
+Region + Product
+       |
+       v
+Region
+       |
+       v
+Grand Total
+
+
+CUBE(Region, Product)
+
+Region + Product
+Region
+Product
+Grand Total
+
+All possible combinations are included.</div>
+
+<h3>6.3 The most important example</h3>
+
+<p><strong>ROLLUP:</strong></p>
+
+<pre><code>GROUP BY ROLLUP (Region, Product)</code></pre>
+
+<p>includes a Region subtotal, but does not independently produce a Product subtotal.</p>
+
+<p><strong>CUBE:</strong></p>
+
+<pre><code>GROUP BY CUBE (Region, Product)</code></pre>
+
+<p>includes both:</p>
+
+<ul>
+    <li>Region subtotals</li>
+    <li>Product subtotals</li>
+    <li>Region + Product detail</li>
+    <li>Grand total</li>
+</ul>
+
+<div class="tip">
+<strong>Simple memory trick:</strong>
+ROLLUP = move upward through a hierarchy.
+CUBE = look at the data from every combination of dimensions.
+</div>
+</section>
+
+<section id="grouping">
+<h2>7. GROUPING and GROUPING_ID — identify subtotal rows</h2>
+
+<p>
+Once you use ROLLUP or CUBE, you will see NULLs. But a NULL may have two very different meanings:
+</p>
+
+<ol>
+    <li>The original data really contains NULL.</li>
+    <li>ROLLUP/CUBE generated NULL to represent an aggregate level.</li>
+</ol>
+
+<p>
+SQL Server provides <code>GROUPING()</code> to help distinguish these situations.
+</p>
+
+<h3>7.1 GROUPING()</h3>
+
+<pre><code>SELECT
+    Region,
+    Product,
+    GROUPING(Region) AS IsRegionSubtotal,
+    GROUPING(Product) AS IsProductSubtotal,
+    SUM(SalesAmount) AS TotalSales
+FROM #Sales
+GROUP BY ROLLUP (Region, Product);</code></pre>
+
+<p>
+For a normal detail row, the grouping flag is 0.
+For a column that has been rolled up in that row, the grouping flag is 1.
+</p>
+
+<table>
+<tr><th>Region</th><th>Product</th><th>GROUPING(Region)</th><th>GROUPING(Product)</th><th>Meaning</th></tr>
+<tr><td>East</td><td>Laptop</td><td>0</td><td>0</td><td>Detail row</td></tr>
+<tr><td>East</td><td>NULL</td><td>0</td><td>1</td><td>East subtotal</td></tr>
+<tr><td>NULL</td><td>NULL</td><td>1</td><td>1</td><td>Grand total</td></tr>
+</table>
+
+<h3>7.2 GROUPING_ID()</h3>
+
+<p>
+<code>GROUPING_ID()</code> combines multiple grouping flags into one integer.
+It is useful when a report needs to identify aggregation levels programmatically.
+</p>
+
+<pre><code>SELECT
+    Region,
+    Product,
+    GROUPING_ID(Region, Product) AS GroupingLevel,
+    SUM(SalesAmount) AS TotalSales
+FROM #Sales
+GROUP BY ROLLUP (Region, Product);</code></pre>
+
+<p>
+<strong>GROUPING tells you whether NULL represents a grouping-generated subtotal.</strong>
+</p>
+</section>
+
+<section id="rank">
+<h2>8. RANK — assign positions while preserving ties</h2>
+
+<p>
+GROUP BY, ROLLUP and CUBE are about <strong>aggregation</strong>.
+Ranking is different: ranking compares rows and assigns a position.
+</p>
+
+<h3>8.1 Start with a simple question</h3>
+<p>
+Suppose we want to rank salespeople by total sales.
+First, calculate the total for each salesperson:
+</p>
+
+<pre><code>SELECT
+    Salesperson,
+    SUM(SalesAmount) AS TotalSales
+FROM #Sales
+GROUP BY Salesperson;</code></pre>
+
+<p>
+Now we have one row per salesperson. We can rank those rows.
+</p>
+
+<pre><code>SELECT
+    Salesperson,
+    TotalSales,
+    RANK() OVER (ORDER BY TotalSales DESC) AS SalesRank
+FROM
+(
+    SELECT
+        Salesperson,
+        SUM(SalesAmount) AS TotalSales
+    FROM #Sales
+    GROUP BY Salesperson
+) AS SalesTotals;</code></pre>
+
+<h3>8.2 What does RANK() do?</h3>
+
+<p>
+Suppose the values are:
+</p>
+
+<table>
+<tr><th>Person</th><th>Score</th><th>RANK()</th></tr>
+<tr><td>A</td><td>100</td><td>1</td></tr>
+<tr><td>B</td><td>90</td><td>2</td></tr>
+<tr><td>C</td><td>90</td><td>2</td></tr>
+<tr><td>D</td><td>80</td><td>4</td></tr>
+</table>
+
+<p>
+B and C are tied for second. Therefore the next rank is <strong>4</strong>, not 3.
+This is called a <strong>ranking gap</strong>.
+</p>
+
+<div class="diagram">100  --> Rank 1
+ 90  --> Rank 2
+ 90  --> Rank 2
+ 80  --> Rank 4
+
+                 ^ 
+                 |
+        Rank 3 is skipped</div>
+
+<h3>8.3 PARTITION BY: rank separately inside groups</h3>
+
+<p>
+Suppose we want to rank salespeople <strong>within each region</strong>, rather than
+across the entire company.
+</p>
+
+<pre><code>SELECT
+    Region,
+    Salesperson,
+    TotalSales,
+    RANK() OVER
+    (
+        PARTITION BY Region
+        ORDER BY TotalSales DESC
+    ) AS RegionalRank
+FROM
+(
+    SELECT
+        Region,
+        Salesperson,
+        SUM(SalesAmount) AS TotalSales
+    FROM #Sales
+    GROUP BY Region, Salesperson
+) AS RegionalTotals;</code></pre>
+
+<p>
+<code>PARTITION BY Region</code> means:
+<strong>start a separate ranking competition for each region.</strong>
+</p>
+
+<div class="diagram">West
+  Alice -> Rank 1
+  Bob   -> Rank 2
+
+East
+  Carol -> Rank 1
+  David -> Rank 2</div>
+
+<div class="note">
+<strong>Window function idea:</strong> RANK() does not collapse rows into one row per group.
+It calculates a value for each row while keeping the rows available in the result.
+</div>
+</section>
+
+<section id="dense">
+<h2>9. DENSE_RANK — ranking without gaps</h2>
+
+<p>
+<code>DENSE_RANK()</code> is similar to <code>RANK()</code>, but it does not skip a number
+after a tie.
+</p>
+
+<pre><code>SELECT
+    Person,
+    Score,
+    DENSE_RANK() OVER (ORDER BY Score DESC) AS DenseRank
+FROM Scores;</code></pre>
+
+<p>Using the same scores:</p>
+
+<table>
+<tr><th>Person</th><th>Score</th><th>DENSE_RANK()</th></tr>
+<tr><td>A</td><td>100</td><td>1</td></tr>
+<tr><td>B</td><td>90</td><td>2</td></tr>
+<tr><td>C</td><td>90</td><td>2</td></tr>
+<tr><td>D</td><td>80</td><td>3</td></tr>
+</table>
+
+<p>
+There is no skipped rank. The next distinct score gets rank 3.
+</p>
+
+<div class="diagram">100  --> Dense Rank 1
+ 90  --> Dense Rank 2
+ 90  --> Dense Rank 2
+ 80  --> Dense Rank 3
+
+                 ^
+                 |
+        No rank is skipped</div>
+
+<h3>9.1 Why might this be useful?</h3>
+
+<p>
+Imagine exam scores:
+</p>
+
+<table>
+<tr><th>Student</th><th>Score</th></tr>
+<tr><td>Anna</td><td>95</td></tr>
+<tr><td>Ben</td><td>90</td></tr>
+<tr><td>Chris</td><td>90</td></tr>
+<tr><td>David</td><td>85</td></tr>
+</table>
+
+<p>
+If you want the positions in a traditional competition ranking, use RANK().
+If you want each distinct score to represent the next rank number without gaps, use DENSE_RANK().
+</p>
+</section>
+
+<section id="rankcompare">
+<h2>10. RANK vs DENSE_RANK — compare after learning both</h2>
+
+<table>
+<tr><th>Feature</th><th>RANK()</th><th>DENSE_RANK()</th></tr>
+<tr>
+<td>Handles ties</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Same tied values get the same rank</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Skips a rank after a tie</td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Example for 100, 90, 90, 80</td>
+<td>1, 2, 2, 4</td>
+<td>1, 2, 2, 3</td>
+</tr>
+</table>
+
+<h3>10.1 One more ranking function: ROW_NUMBER()</h3>
+
+<p>
+SQL Server also has <code>ROW_NUMBER()</code>. It is useful to understand because it shows
+what makes RANK and DENSE_RANK different.
+</p>
+
+<pre><code>ROW_NUMBER() OVER (ORDER BY Score DESC)</code></pre>
+
+<p>
+For 100, 90, 90, 80, the row numbers are:
+</p>
+
+<table>
+<tr><th>Score</th><th>ROW_NUMBER()</th><th>RANK()</th><th>DENSE_RANK()</th></tr>
+<tr><td>100</td><td>1</td><td>1</td><td>1</td></tr>
+<tr><td>90</td><td>2</td><td>2</td><td>2</td></tr>
+<tr><td>90</td><td>3</td><td>2</td><td>2</td></tr>
+<tr><td>80</td><td>4</td><td>4</td><td>3</td></tr>
+</table>
+
+<div class="tip">
+<strong>Three-way memory trick:</strong><br>
+ROW_NUMBER = every row gets a unique number.<br>
+RANK = ties share a rank, and gaps are created.<br>
+DENSE_RANK = ties share a rank, but no gaps are created.
+</div>
+</section>
+
+<section id="practice">
+<h2>11. Practice questions</h2>
+
+<div class="question">
+<strong>Question 1</strong><br>
+Write a query that calculates total sales for each Region.
+</div>
+<div class="answer">
+<pre><code>SELECT
+    Region,
+    SUM(SalesAmount) AS TotalSales
+FROM #Sales
+GROUP BY Region;</code></pre>
+</div>
+
+<div class="question">
+<strong>Question 2</strong><br>
+Write a query that calculates total sales for each Region and Product.
+</div>
+<div class="answer">
+<pre><code>SELECT
+    Region,
+    Product,
+    SUM(SalesAmount) AS TotalSales
+FROM #Sales
+GROUP BY Region, Product;</code></pre>
+</div>
+
+<div class="question">
+<strong>Question 3</strong><br>
+What does this do?
+<code>COALESCE(PhoneNumber, 'No Phone')</code>
+</div>
+<div class="answer">
+It returns PhoneNumber when it is not NULL. If PhoneNumber is NULL,
+it returns <code>'No Phone'</code>.
+</div>
+
+<div class="question">
+<strong>Question 4</strong><br>
+What levels does <code>ROLLUP(Region, Product)</code> create?
+</div>
+<div class="answer">
+Region + Product, then Region subtotal, then the grand total.
+</div>
+
+<div class="question">
+<strong>Question 5</strong><br>
+What extra subtotal can CUBE(Region, Product) produce that ROLLUP(Region, Product)
+does not independently produce?
+</div>
+<div class="answer">
+A Product subtotal across all regions.
+</div>
+
+<div class="question">
+<strong>Question 6</strong><br>
+For scores 100, 90, 90, 80, what are the RANK and DENSE_RANK values?
+</div>
+<div class="answer">
+RANK = 1, 2, 2, 4<br>
+DENSE_RANK = 1, 2, 2, 3
+</div>
+
+<div class="question">
+<strong>Question 7</strong><br>
+What does PARTITION BY do in a ranking window function?
+</div>
+<div class="answer">
+It divides the rows into separate groups for the calculation. For example,
+PARTITION BY Region makes the ranking restart separately for each Region.
+</div>
+</section>
+
+<section id="cheatsheet">
+<h2>12. Quick reference</h2>
+
+<table>
+<tr><th>Concept</th><th>Main purpose</th><th>Basic syntax</th></tr>
+<tr>
+<td><span class="pill">GROUP BY</span></td>
+<td>Group rows so aggregate functions can summarize each group.</td>
+<td><code>GROUP BY Region</code></td>
+</tr>
+<tr>
+<td><span class="pill">COALESCE</span></td>
+<td>Return the first non-NULL value.</td>
+<td><code>COALESCE(column, 'Default')</code></td>
+</tr>
+<tr>
+<td><span class="pill">ROLLUP</span></td>
+<td>Create hierarchical subtotals and a grand total.</td>
+<td><code>GROUP BY ROLLUP(Region, Product)</code></td>
+</tr>
+<tr>
+<td><span class="pill">CUBE</span></td>
+<td>Create all grouping combinations of the specified dimensions.</td>
+<td><code>GROUP BY CUBE(Region, Product)</code></td>
+</tr>
+<tr>
+<td><span class="pill">GROUPING</span></td>
+<td>Identify whether a NULL was generated by a grouping operation.</td>
+<td><code>GROUPING(Product)</code></td>
+</tr>
+<tr>
+<td><span class="pill">RANK</span></td>
+<td>Rank rows; ties share a rank and gaps can occur.</td>
+<td><code>RANK() OVER (ORDER BY Score DESC)</code></td>
+</tr>
+<tr>
+<td><span class="pill">DENSE_RANK</span></td>
+<td>Rank rows; ties share a rank and gaps do not occur.</td>
+<td><code>DENSE_RANK() OVER (ORDER BY Score DESC)</code></td>
+</tr>
+</table>
+
+<h3>The whole lesson in one picture</h3>
+
+<div class="diagram">                         SQL REPORTING
+                              |
+             +----------------+----------------+
+             |                                 |
+         AGGREGATION                         RANKING
+             |                                 |
+          GROUP BY                    +--------+--------+
+             |                        |        |        |
+        +----+----+              ROW_NUMBER RANK DENSE_RANK
+        |         |
+    COALESCE   Subtotals
+                  |
+             +----+----+
+             |         |
+           ROLLUP     CUBE
+             |         |
+       hierarchy    all combinations</div>
+
+<div class="note">
+<strong>Recommended learning order:</strong>
+First become comfortable with GROUP BY and aggregate functions.
+Then learn how COALESCE handles NULL. Then learn ROLLUP and CUBE.
+After you understand both, compare them. Finally learn window functions such as
+RANK and DENSE_RANK, because ranking is a different problem from aggregation.
+</div>
+
+<h2>Final takeaway</h2>
+
+<p>
+The most important thing is not the syntax. Ask what question you are trying to answer:
+</p>
+
+<table>
+<tr><th>If you want to...</th><th>Think about...</th></tr>
+<tr><td>Summarize rows into groups</td><td>GROUP BY</td></tr>
+<tr><td>Provide a replacement when a value is NULL</td><td>COALESCE</td></tr>
+<tr><td>Add hierarchical subtotals</td><td>ROLLUP</td></tr>
+<tr><td>Get subtotals for every combination of dimensions</td><td>CUBE</td></tr>
+<tr><td>Tell a subtotal-generated NULL from an ordinary NULL</td><td>GROUPING / GROUPING_ID</td></tr>
+<tr><td>Give positions to rows</td><td>RANK / DENSE_RANK / ROW_NUMBER</td></tr>
+</table>
+
+
+
+</main>
+
+<footer>
+SQL Server Tutorial — GROUP BY, COALESCE, ROLLUP, CUBE, RANK and DENSE_RANK
+</footer>
+</body>
+</html>
