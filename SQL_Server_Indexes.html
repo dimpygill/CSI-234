@@ -1,0 +1,249 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SQL Server Indexes: Clustered, Nonclustered, and Composite</title><style>*{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:#182536;font:16px/1.6 Calibri,"Segoe UI",Arial,sans-serif}main{max-width:1000px;margin:auto;background:white;padding:36px 42px}header{border-bottom:3px solid #23627d;padding-bottom:18px}h1{font-size:32px;margin:0 0 8px;color:#164b65}h2{font-size:24px;color:#164b65;margin:30px 0 12px}h3{font-size:19px;margin:0 0 6px}p{margin:9px 0}li{margin:4px 0}a{color:#176383}nav{background:#edf5f8;padding:16px 20px;margin-top:20px}nav ol{columns:2;padding-left:24px;margin:0}pre{background:#f6f8fa;border:1px solid #d6dfe7;border-left:4px solid #377b96;padding:14px 16px;overflow:auto;line-height:1.45;font-size:14px;white-space:pre}code{font-family:Consolas,"Courier New",monospace}table{border-collapse:collapse;width:100%;font-size:15px;margin:14px 0}th,td{border:1px solid #ccd8e0;padding:9px 12px;text-align:left;vertical-align:top}th{background:#e7f1f5}.tablewrap{overflow:auto}.qa{border-top:1px solid #d5dfe7;padding:16px 0}summary{cursor:pointer;color:#176383;font-weight:bold}.small{font-size:14px;color:#4e6072}@media(max-width:650px){main{padding:22px 18px}nav ol{columns:1}h1{font-size:27px}}@media print{body{background:white}main{max-width:none;padding:0}nav{display:none}pre{white-space:pre-wrap;overflow:visible}h2,h3{break-after:avoid}tr,pre{break-inside:avoid}a{color:inherit}}</style></head><body><main><header><h1>SQL Server Indexes</h1><p>Clustered, nonclustered, and composite indexes explained through a bookstore database</p></header><nav aria-label="Contents"><strong>Contents</strong><ol><li><a href="#section1">Why databases need indexes</a></li><li><a href="#section2">Three terms that describe different properties</a></li><li><a href="#section3">Build the sample bookstore database</a></li><li><a href="#section4">Clustered index: the table at the leaf level</a></li><li><a href="#section5">Primary key and clustered index are separate ideas</a></li><li><a href="#section6">Nonclustered index: another route to the rows</a></li><li><a href="#section7">Composite index: why column order matters</a></li><li><a href="#section8">Compare the reverse key order</a></li><li><a href="#section9">INCLUDE and covering indexes</a></li><li><a href="#section10">Indexes for joins and sales queries</a></li><li><a href="#section11">How to measure instead of guessing</a></li><li><a href="#section12">Write predicates that can use indexes</a></li><li><a href="#section13">Storage, updates, uniqueness, and maintenance</a></li><li><a href="#section14">A practical index-design checklist</a></li><li><a href="#section15">Practice questions and explained answers</a></li><li><a href="#section16">Microsoft documentation</a></li></ol></nav><section id="section1"><h2>1. Why databases need indexes</h2><p>An index is a search structure that helps SQL Server locate rows without examining every row in a table. Think of looking for an author in a bookstore catalog: a catalog organized by author lets you narrow the search quickly. The catalog takes space and must be updated when books change.</p><p>Suppose ORDERS contains one million rows. A query for one customer might otherwise read many pages to find that customer's orders. A suitable index can narrow the search to a smaller key range. The actual improvement depends on how many rows match, which columns are needed, and the plan SQL Server chooses.</p><ul><li><strong>Filtering:</strong> find one customer, category, or date range.</li><li><strong>Joining:</strong> locate matching order details or customer rows.</li><li><strong>Ordering:</strong> an appropriate key order may avoid a separate Sort operation.</li><li><strong>Grouping:</strong> ordered input can sometimes support an efficient aggregation plan.</li></ul><p>Indexes do not change the query's intended answer. They change the available ways to retrieve it. They are maintained automatically after INSERT, UPDATE, and DELETE operations, so faster reads can come with extra storage and write work.</p></section><section id="section2"><h2>2. Three terms that describe different properties</h2><div class="tablewrap"><table><thead><tr><th>Term</th><th>Meaning</th><th>Example</th></tr></thead><tbody><tr><td>Clustered</td><td>The leaf level contains the table rows, organized by the clustering key. A rowstore table has at most one.</td><td>ORDERS clustered on OrderID</td></tr><tr><td>Nonclustered</td><td>A separate structure with search keys and row locators; it can carry additional columns.</td><td>An index on BOOKS(Category)</td></tr><tr><td>Composite</td><td>An index key containing two or more columns; it can be clustered or nonclustered.</td><td>ORDERS(CustomerID, OrderDate)</td></tr></tbody></table></div><p><strong>Composite is not a third storage type.</strong> “Nonclustered composite index” means a separate index with multiple key columns. “Clustered composite index” means the table's clustered organization uses multiple key columns.</p></section><section id="section3"><h2>3. Build the sample bookstore database</h2><ol><li>Connect SSMS to a Microsoft SQL Server instance.</li><li>Open a new query window and run the complete setup block below once.</li><li>For later examples, keep the database selection set to BookstoreIndexLab.</li><li>If CREATE DATABASE is unavailable, use an approved empty practice database and run the block starting with the table-existence check.</li></ol><p><code>GO</code> separates batches in SSMS; it is a client command, not a T-SQL statement. If the existence check raises an error, stop and use the existing lab or choose an empty database. Do not continue creating the tables manually.</p><pre><code>-- Run once in SQL Server Management Studio (SSMS).
+-- CREATE DATABASE requires permission on the SQL Server instance.
+USE master;
+GO
+IF DB_ID(N&#x27;BookstoreIndexLab&#x27;) IS NULL
+    EXEC(N&#x27;CREATE DATABASE BookstoreIndexLab;&#x27;);
+GO
+USE BookstoreIndexLab;
+GO
+-- Protect an existing lab rather than silently overwriting its tables.
+IF OBJECT_ID(N&#x27;dbo.CUSTOMERS&#x27;, N&#x27;U&#x27;) IS NOT NULL
+ OR OBJECT_ID(N&#x27;dbo.BOOKS&#x27;, N&#x27;U&#x27;) IS NOT NULL
+ OR OBJECT_ID(N&#x27;dbo.ORDERS&#x27;, N&#x27;U&#x27;) IS NOT NULL
+ OR OBJECT_ID(N&#x27;dbo.ORDER_DETAILS&#x27;, N&#x27;U&#x27;) IS NOT NULL
+    THROW 50001, &#x27;Lab tables already exist. Use the existing lab or a new database.&#x27;, 1;
+
+CREATE TABLE dbo.CUSTOMERS (
+    CustomerID INT NOT NULL,
+    CustomerName VARCHAR(100) NOT NULL,
+    City VARCHAR(50) NULL,
+    State VARCHAR(50) NULL,
+    CONSTRAINT PK_CUSTOMERS PRIMARY KEY CLUSTERED (CustomerID)
+);
+CREATE TABLE dbo.BOOKS (
+    BookID INT NOT NULL,
+    Title VARCHAR(150) NOT NULL,
+    Category VARCHAR(50) NOT NULL,
+    AuthorName VARCHAR(100) NOT NULL,
+    Price DECIMAL(10,2) NOT NULL,
+    CONSTRAINT PK_BOOKS PRIMARY KEY CLUSTERED (BookID)
+);
+CREATE TABLE dbo.ORDERS (
+    OrderID INT NOT NULL,
+    CustomerID INT NOT NULL,
+    OrderDate DATE NOT NULL,
+    StoreLocation VARCHAR(50) NOT NULL,
+    Salesperson VARCHAR(100) NULL,
+    CONSTRAINT PK_ORDERS PRIMARY KEY CLUSTERED (OrderID),
+    CONSTRAINT FK_ORDERS_CUSTOMERS FOREIGN KEY (CustomerID)
+        REFERENCES dbo.CUSTOMERS(CustomerID)
+);
+CREATE TABLE dbo.ORDER_DETAILS (
+    OrderID INT NOT NULL,
+    BookID INT NOT NULL,
+    Quantity INT NOT NULL CHECK (Quantity &gt; 0),
+    UnitPrice DECIMAL(10,2) NOT NULL,
+    Discount DECIMAL(5,2) NOT NULL DEFAULT (0)
+        CHECK (Discount BETWEEN 0 AND 100),
+    CONSTRAINT PK_ORDER_DETAILS PRIMARY KEY CLUSTERED (OrderID, BookID),
+    CONSTRAINT FK_DETAILS_ORDERS FOREIGN KEY (OrderID)
+        REFERENCES dbo.ORDERS(OrderID),
+    CONSTRAINT FK_DETAILS_BOOKS FOREIGN KEY (BookID)
+        REFERENCES dbo.BOOKS(BookID)
+);
+INSERT dbo.CUSTOMERS VALUES
+(1,&#x27;Asha Patel&#x27;,&#x27;Vancouver&#x27;,&#x27;WA&#x27;),
+(2,&#x27;Daniel Kim&#x27;,&#x27;Seattle&#x27;,&#x27;WA&#x27;),
+(3,&#x27;Maya Singh&#x27;,&#x27;Portland&#x27;,&#x27;OR&#x27;),
+(4,&#x27;Noah Brown&#x27;,&#x27;Tacoma&#x27;,&#x27;WA&#x27;);
+INSERT dbo.BOOKS VALUES
+(101,&#x27;Python Foundations&#x27;,&#x27;Programming&#x27;,&#x27;Anita Rao&#x27;,40.00),
+(102,&#x27;SQL in Practice&#x27;,&#x27;Database&#x27;,&#x27;David Lee&#x27;,50.00),
+(103,&#x27;Learning C Sharp&#x27;,&#x27;Programming&#x27;,&#x27;Anita Rao&#x27;,45.00),
+(104,&#x27;Designing Interfaces&#x27;,&#x27;Design&#x27;,&#x27;Maria Chen&#x27;,35.00),
+(105,&#x27;Database Design&#x27;,&#x27;Database&#x27;,&#x27;David Lee&#x27;,60.00),
+(106,&#x27;Creative Thinking&#x27;,&#x27;Design&#x27;,&#x27;Sara Ali&#x27;,30.00);
+INSERT dbo.ORDERS VALUES
+(1001,1,&#x27;20260901&#x27;,&#x27;Vancouver&#x27;,&#x27;Priya&#x27;),
+(1002,2,&#x27;20260903&#x27;,&#x27;Seattle&#x27;,&#x27;Alex&#x27;),
+(1003,1,&#x27;20260910&#x27;,&#x27;Vancouver&#x27;,&#x27;Priya&#x27;),
+(1004,3,&#x27;20260912&#x27;,&#x27;Portland&#x27;,NULL),
+(1005,2,&#x27;20261001&#x27;,&#x27;Seattle&#x27;,&#x27;Alex&#x27;),
+(1006,4,&#x27;20261002&#x27;,&#x27;Vancouver&#x27;,&#x27;Jordan&#x27;);
+INSERT dbo.ORDER_DETAILS (OrderID,BookID,Quantity,UnitPrice,Discount) VALUES
+(1001,101,2,40.00,10.00), (1001,102,1,50.00,0.00),
+(1002,104,1,35.00,0.00), (1003,103,1,45.00,0.00),
+(1003,105,1,60.00,5.00), (1004,106,3,30.00,0.00),
+(1005,102,2,50.00,10.00), (1006,101,1,40.00,0.00);
+
+SELECT &#x27;CUSTOMERS&#x27; AS TableName, COUNT(*) AS RowCount FROM dbo.CUSTOMERS
+UNION ALL SELECT &#x27;BOOKS&#x27;, COUNT(*) FROM dbo.BOOKS
+UNION ALL SELECT &#x27;ORDERS&#x27;, COUNT(*) FROM dbo.ORDERS
+UNION ALL SELECT &#x27;ORDER_DETAILS&#x27;, COUNT(*) FROM dbo.ORDER_DETAILS;</code></pre><div class="tablewrap"><table><thead><tr><th>Table</th><th>Rows after setup</th><th>Relationship</th></tr></thead><tbody><tr><td>CUSTOMERS</td><td>4</td><td>One customer can place many orders.</td></tr><tr><td>BOOKS</td><td>6</td><td>One book can appear in many order details.</td></tr><tr><td>ORDERS</td><td>6</td><td>Each order belongs to one customer.</td></tr><tr><td>ORDER_DETAILS</td><td>8</td><td>Each row identifies one book within an order.</td></tr></tbody></table></div><p>The composite primary key on ORDER_DETAILS allows the same BookID in different orders and different BookIDs in the same order, but prevents duplicate (OrderID, BookID) pairs. This lab assumes one row per book per order; a system allowing repeated lines would usually need a separate line identifier.</p></section><section id="section4"><h2>4. Clustered index: the table at the leaf level</h2><p>The setup explicitly creates a clustered primary-key index on ORDERS(OrderID). The clustering key is OrderID; leaf pages contain the full order rows. Upper levels help navigate to leaf pages. This is a logical key organization, not a promise that every page sits consecutively on disk.</p><div class="tablewrap"><table><thead><tr><th>Illustrative leaf key</th><th>CustomerID</th><th>OrderDate</th><th>StoreLocation</th></tr></thead><tbody><tr><td>1001</td><td>1</td><td>2026-09-01</td><td>Vancouver</td></tr><tr><td>1002</td><td>2</td><td>2026-09-03</td><td>Seattle</td></tr><tr><td>1003</td><td>1</td><td>2026-09-10</td><td>Vancouver</td></tr></tbody></table></div><pre><code>-- The clustered primary key already exists; query it.
+SELECT OrderID, CustomerID, OrderDate, StoreLocation, Salesperson
+FROM dbo.ORDERS
+WHERE OrderID = 1003;
+
+-- A range on the clustering key can also be useful.
+SELECT OrderID, CustomerID, OrderDate
+FROM dbo.ORDERS
+WHERE OrderID BETWEEN 1002 AND 1004
+ORDER BY OrderID;</code></pre><p>The first query returns order 1003: customer 1, September 10, Vancouver, Priya. The second returns orders 1002, 1003, and 1004. SQL Server may choose a clustered index seek, although a scan can still be reasonable for a small table.</p><p><strong>Always use ORDER BY when output order matters.</strong> A clustered index does not guarantee SELECT result order.</p><p>Common clustered-key considerations are a narrow key, stable values, and an insertion pattern suitable for the workload. A wide clustering key increases the row-locator burden in nonclustered indexes. Sequential keys can reduce some random-insertion page splits but can introduce last-page contention under heavy concurrent inserts.</p></section><section id="section5"><h2>5. Primary key and clustered index are separate ideas</h2><p>A primary key is a constraint that enforces unique, non-NULL identification. Clustered describes storage organization. SQL Server commonly creates a clustered index for a primary key when no clustered index already exists and NONCLUSTERED is not specified. The choice can be explicit.</p><pre><code>-- Separate demonstration table, not a replacement for ORDERS.
+CREATE TABLE dbo.IndexLayoutDemo (
+    DemoID INT NOT NULL,
+    CreatedDate DATE NOT NULL,
+    Note VARCHAR(80) NULL,
+    CONSTRAINT PK_IndexLayoutDemo PRIMARY KEY NONCLUSTERED (DemoID)
+);
+-- Before this statement, the table is a heap with a nonclustered PK.
+CREATE CLUSTERED INDEX CX_IndexLayoutDemo_CreatedDate_DemoID
+ON dbo.IndexLayoutDemo (CreatedDate, DemoID);
+
+INSERT dbo.IndexLayoutDemo VALUES
+(1,&#x27;20261001&#x27;,&#x27;First record&#x27;), (2,&#x27;20261001&#x27;,&#x27;Second record&#x27;);
+SELECT DemoID, CreatedDate, Note
+FROM dbo.IndexLayoutDemo
+ORDER BY CreatedDate, DemoID;</code></pre><p>This table has a nonclustered primary key on DemoID and a composite clustered index on (CreatedDate, DemoID). A second clustered index on this table would fail because one already exists. A nonunique clustered index is permitted; SQL Server handles duplicate clustered keys internally. A primary key, however, must be unique.</p></section><section id="section6"><h2>6. Nonclustered index: another route to the rows</h2><p>BOOKS is clustered by BookID. Searching Category is a different access pattern. A nonclustered index stores Category keys separately and carries a row locator. On this clustered table, the locator is based on BookID. On a heap, it uses a row identifier (RID).</p><pre><code>-- Run once after setup.
+CREATE NONCLUSTERED INDEX IX_BOOKS_Category
+ON dbo.BOOKS (Category);
+
+SELECT BookID, Title, Price
+FROM dbo.BOOKS
+WHERE Category = &#x27;Programming&#x27;
+ORDER BY BookID;</code></pre><div class="tablewrap"><table><thead><tr><th>Conceptual Category key</th><th>BookID locator</th></tr></thead><tbody><tr><td>Database</td><td>102</td></tr><tr><td>Database</td><td>105</td></tr><tr><td>Design</td><td>104</td></tr><tr><td>Design</td><td>106</td></tr><tr><td>Programming</td><td>101</td></tr><tr><td>Programming</td><td>103</td></tr></tbody></table></div><p>The query returns books 101 and 103. The index can locate the Programming entries. Title and Price are not stored in this simple index, so an index-based plan may retrieve them from the clustered index using <strong>Key Lookup</strong> operations. The optimizer can instead choose a scan when that is cheaper.</p><p>Duplicate Category values are valid in a nonunique index. Creating a regular index does not require categories to be unique.</p></section><section id="section7"><h2>7. Composite index: why column order matters</h2><p>A composite key is ordered by its first column, then by its second within equal first-column values. For (CustomerID, OrderDate), orders are grouped by customer and ordered by date inside each customer. This is one index, not two independent indexes.</p><pre><code>CREATE NONCLUSTERED INDEX IX_ORDERS_CustomerID_OrderDate
+ON dbo.ORDERS (CustomerID, OrderDate);
+
+SELECT OrderID, CustomerID, OrderDate
+FROM dbo.ORDERS
+WHERE CustomerID = 1
+  AND OrderDate &gt;= &#x27;20260901&#x27;
+  AND OrderDate &lt; &#x27;20261001&#x27;
+ORDER BY OrderDate;</code></pre><div class="tablewrap"><table><thead><tr><th>CustomerID</th><th>OrderDate</th><th>OrderID locator</th></tr></thead><tbody><tr><td>1</td><td>2026-09-01</td><td>1001</td></tr><tr><td>1</td><td>2026-09-10</td><td>1003</td></tr><tr><td>2</td><td>2026-09-03</td><td>1002</td></tr><tr><td>2</td><td>2026-10-01</td><td>1005</td></tr><tr><td>3</td><td>2026-09-12</td><td>1004</td></tr><tr><td>4</td><td>2026-10-02</td><td>1006</td></tr></tbody></table></div><p>Expected rows: orders 1001 and 1003. Equality on CustomerID selects one customer range; the date conditions narrow that range. The half-open date interval includes September and excludes October.</p><div class="tablewrap"><table><thead><tr><th>Predicate</th><th>Fit for (CustomerID, OrderDate)</th></tr></thead><tbody><tr><td>CustomerID = 1</td><td>Can use the leading key to seek.</td></tr><tr><td>CustomerID = 1 AND OrderDate >= a date</td><td>Can seek into a customer/date range.</td></tr><tr><td>OrderDate >= a date, with no CustomerID condition</td><td>Usually cannot directly seek one contiguous date range through this key order; a scan may still use the index.</td></tr><tr><td>CustomerID > 1 AND OrderDate = a date</td><td>The leading range can limit seeking; the date condition may be evaluated as a residual predicate.</td></tr></tbody></table></div><p>A practical starting point is equality keys followed by range or ordering keys. Choose the actual order from important queries and measured plans. “Put the most selective column first” is not a universal rule.</p></section><section id="section8"><h2>8. Compare the reverse key order</h2><pre><code>-- A different candidate for searches by date across all customers.
+CREATE NONCLUSTERED INDEX IX_ORDERS_OrderDate_CustomerID
+ON dbo.ORDERS (OrderDate, CustomerID);
+
+SELECT OrderID, CustomerID, OrderDate
+FROM dbo.ORDERS
+WHERE OrderDate &gt;= &#x27;20261001&#x27;
+  AND OrderDate &lt; &#x27;20261101&#x27;
+ORDER BY OrderDate, CustomerID;</code></pre><p>This returns orders 1005 and 1006. Date-first ordering suits a date range across all customers. Customer-first ordering suits a single customer's history. Both indexes are shown to explain the tradeoff; do not retain both automatically in a real system.</p><p>Two single-column indexes are also not equivalent to one composite index. SQL Server may combine indexes in some plans, but that does not provide the same ordered key structure or cost.</p></section><section id="section9"><h2>9. INCLUDE and covering indexes</h2><p>A <strong>covering index</strong> contains the columns needed by a particular query. Coverage is a relationship between an index and a query. Key columns support navigation and key ordering; included columns provide extra values at the leaf level without becoming search keys.</p><pre><code>-- Replace the simple Category index with a covering version.
+-- Run after section 6; avoid keeping duplicate key definitions.
+CREATE NONCLUSTERED INDEX IX_BOOKS_Category
+ON dbo.BOOKS (Category)
+INCLUDE (Title, Price)
+WITH (DROP_EXISTING = ON);
+
+SELECT BookID, Title, Price
+FROM dbo.BOOKS
+WHERE Category = &#x27;Programming&#x27;;</code></pre><p>The leaf entries now provide Category, Title, Price, and the BookID clustering locator. This query can be answered from the index without fetching Title and Price through Key Lookups. The optimizer still chooses the plan.</p><p><code>INCLUDE (Title, Price)</code> does not organize the index by Title or Price. A Price-only filter cannot treat Price as a seek key merely because it is included. Including every column can create a large, expensive structure; include only useful columns for the target workload.</p><div class="tablewrap"><table><thead><tr><th>Definition</th><th>Key property</th></tr></thead><tbody><tr><td>(Category, Price)</td><td>Two key columns; ordered by category then price.</td></tr><tr><td>(Category) INCLUDE (Price)</td><td>One key column; Price is available as leaf payload.</td></tr></tbody></table></div></section><section id="section10"><h2>10. Indexes for joins and sales queries</h2><pre><code>-- ORDER_DETAILS already has clustered (OrderID, BookID).
+-- Its leading OrderID supports fetching details for one order.
+SELECT o.OrderID, b.Title,
+       od.Quantity * od.UnitPrice * (1 - od.Discount / 100.0) AS SalesAmount
+FROM dbo.ORDERS AS o
+JOIN dbo.ORDER_DETAILS AS od ON od.OrderID = o.OrderID
+JOIN dbo.BOOKS AS b ON b.BookID = od.BookID
+WHERE o.OrderID = 1001
+ORDER BY b.BookID;
+
+-- Candidate for finding all purchases of a particular book.
+CREATE NONCLUSTERED INDEX IX_ORDER_DETAILS_BookID
+ON dbo.ORDER_DETAILS (BookID)
+INCLUDE (Quantity, UnitPrice, Discount);
+
+SELECT od.OrderID,
+       SUM(od.Quantity * od.UnitPrice * (1 - od.Discount / 100.0)) AS TotalSales
+FROM dbo.ORDER_DETAILS AS od
+WHERE od.BookID = 101
+GROUP BY od.OrderID
+ORDER BY od.OrderID;</code></pre><p>The first result contains Python Foundations (72.00) and SQL in Practice (50.00). The second contains order 1001 (72.00) and order 1006 (40.00). The new index targets BookID searches; the clustered key starts with OrderID, which targets a different path.</p><p>Foreign-key creation does not automatically create an index on the referencing columns. Inspect existing indexes before adding one: ORDER_DETAILS already has an OrderID-leading index, and the customer/date index already starts with ORDERS.CustomerID. Indexes can support joins, but a query reading most rows may reasonably use scans and a hash join.</p></section><section id="section11"><h2>11. How to measure instead of guessing</h2><ol><li>Use a larger lab table for a meaningful comparison.</li><li>In SSMS, choose Query → Include Actual Execution Plan (Ctrl+M).</li><li>Run the baseline query with STATISTICS IO and TIME enabled.</li><li>Create the candidate index and run exactly the same query.</li><li>Compare logical reads, CPU and elapsed time, operators, and actual versus estimated row counts.</li><li>Repeat cautiously: cache state and competing work influence timing. Record your own measurements.</li></ol><p>The four-to-eight-row bookstore tables teach syntax and results; they do not demonstrate reliable speed differences. The following separate table contains 100,000 generated rows and begins as a heap.</p><pre><code>-- Run this performance lab once.
+CREATE TABLE dbo.OrderSearchLab (
+    OrderID INT NOT NULL,
+    CustomerID INT NOT NULL,
+    OrderDate DATE NOT NULL,
+    TotalAmount DECIMAL(10,2) NOT NULL
+);
+;WITH Digits AS (
+    SELECT n FROM (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)) AS d(n)
+), Numbers AS (
+    SELECT 1 + a.n + 10*b.n + 100*c.n + 1000*d.n + 10000*e.n AS n
+    FROM Digits AS a CROSS JOIN Digits AS b CROSS JOIN Digits AS c
+    CROSS JOIN Digits AS d CROSS JOIN Digits AS e
+)
+INSERT dbo.OrderSearchLab (OrderID, CustomerID, OrderDate, TotalAmount)
+SELECT n, ((n - 1) % 1000) + 1,
+       DATEADD(day, (n - 1) % 365, CONVERT(date, &#x27;20260101&#x27;)),
+       CAST(10 + (n % 200) AS DECIMAL(10,2))
+FROM Numbers;
+
+SET STATISTICS IO ON;
+SET STATISTICS TIME ON;
+-- Baseline: no index on this table yet.
+SELECT OrderID, OrderDate, TotalAmount
+FROM dbo.OrderSearchLab
+WHERE CustomerID = 42;
+
+CREATE NONCLUSTERED INDEX IX_OrderSearchLab_CustomerID
+ON dbo.OrderSearchLab (CustomerID)
+INCLUDE (OrderID, OrderDate, TotalAmount);
+
+-- Same query after indexing.
+SELECT OrderID, OrderDate, TotalAmount
+FROM dbo.OrderSearchLab
+WHERE CustomerID = 42;
+SET STATISTICS IO OFF;
+SET STATISTICS TIME OFF;</code></pre><p>Both queries return 100 rows. Before indexing, expect a table scan; afterward, a covering index seek is a reasonable expectation, not a promised plan. In the Messages tab, <strong>logical reads</strong> count pages read from the data cache. Physical reads count reads from disk. Elapsed time can be noisy, especially for fast queries.</p><div class="tablewrap"><table><thead><tr><th>Operator</th><th>What to investigate</th></tr></thead><tbody><tr><td>Table Scan / Clustered Index Scan</td><td>Reads the heap or clustered index; can be efficient for broad queries.</td></tr><tr><td>Index Scan</td><td>Reads nonclustered index entries; can be cheaper than scanning wider table rows.</td></tr><tr><td>Index Seek</td><td>Navigates to a key range; inspect rows read and residual predicates, not just the name.</td></tr><tr><td>Key Lookup / RID Lookup</td><td>Retrieves missing columns from clustered rows / heap rows. Many repeated lookups can be costly.</td></tr><tr><td>Sort</td><td>Orders data explicitly; matching index order may remove it in some plans.</td></tr></tbody></table></div></section><section id="section12"><h2>12. Write predicates that can use indexes</h2><p><strong>SARGable</strong> means a search predicate can support an index search. Avoid unnecessary functions on indexed columns when an equivalent direct comparison exists. It still takes a suitable index and a favorable plan to obtain a seek.</p><pre><code>-- Less suitable for seeking by OrderDate:
+SELECT OrderID, OrderDate FROM dbo.ORDERS
+WHERE YEAR(OrderDate) = 2026 AND MONTH(OrderDate) = 9;
+
+-- Direct date range:
+SELECT OrderID, OrderDate FROM dbo.ORDERS
+WHERE OrderDate &gt;= &#x27;20260901&#x27; AND OrderDate &lt; &#x27;20261001&#x27;;
+
+-- A prefix can define a key range on an appropriate Title index:
+CREATE NONCLUSTERED INDEX IX_BOOKS_Title ON dbo.BOOKS (Title);
+SELECT BookID, Title FROM dbo.BOOKS WHERE Title LIKE &#x27;Python%&#x27;;
+
+-- A leading wildcard usually prevents a normal Title-key seek:
+SELECT BookID, Title FROM dbo.BOOKS WHERE Title LIKE &#x27;%Python%&#x27;;</code></pre><p>Both date queries return orders 1001–1004 in this sample, although their displayed order is unspecified. Both Title queries return book 101. Matching results do not imply identical access paths. Also use parameter types compatible with column types; implicit conversions on an indexed column can hinder efficient access.</p></section><section id="section13"><h2>13. Storage, updates, uniqueness, and maintenance</h2><ul><li>INSERT adds entries to relevant indexes; DELETE removes them.</li><li>UPDATE may change key placement or leaf payload when indexed or included values change.</li><li>More indexes increase storage, logging, and maintenance work.</li><li>Statistics help the optimizer estimate row counts; inaccurate estimates can affect plan choice.</li><li>Page splits and low page density can affect reads and writes, but maintenance should follow evidence rather than a fixed “rebuild everything” rule.</li></ul><p>UNIQUE is another independent property: it enforces uniqueness of the complete index key. A unique composite key allows repetition of individual columns as long as the complete combination is unique. Index creation fails if existing rows violate uniqueness.</p><pre><code>-- Optional uniqueness demonstration on the demo table.
+CREATE UNIQUE NONCLUSTERED INDEX UX_IndexLayoutDemo_Note
+ON dbo.IndexLayoutDemo (Note);
+-- This is valid for the current distinct notes. A future duplicate note fails.
+
+-- Inspect indexes, including PK-created indexes.
+SELECT OBJECT_NAME(i.object_id) AS TableName,
+       i.name AS IndexName, i.type_desc,
+       i.is_unique, i.is_primary_key
+FROM sys.indexes AS i
+WHERE i.object_id IN (
+    OBJECT_ID(&#x27;dbo.BOOKS&#x27;), OBJECT_ID(&#x27;dbo.ORDERS&#x27;),
+    OBJECT_ID(&#x27;dbo.ORDER_DETAILS&#x27;), OBJECT_ID(&#x27;dbo.CUSTOMERS&#x27;))
+ORDER BY TableName, i.index_id;
+
+-- Inspect key order and included columns for ORDERS.
+SELECT i.name AS IndexName, c.name AS ColumnName,
+       ic.key_ordinal, ic.is_descending_key, ic.is_included_column
+FROM sys.indexes AS i
+JOIN sys.index_columns AS ic
+ ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+JOIN sys.columns AS c
+ ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+WHERE i.object_id = OBJECT_ID(&#x27;dbo.ORDERS&#x27;)
+ORDER BY i.name, ic.key_ordinal, ic.index_column_id;</code></pre><p>The catalog query shows explicitly defined key and included columns; clustering locator columns implicitly carried by a nonclustered index may not appear there. Primary-key indexes are managed through their constraints, so do not treat them like ordinary removable secondary indexes.</p><pre><code>-- Optional: remove a tutorial-created candidate after comparison.
+DROP INDEX IX_ORDERS_OrderDate_CustomerID ON dbo.ORDERS;
+-- Its date-first route is gone; data and the customer-first index remain.
+-- Recreate it with section 8 if you need to repeat that example.</code></pre></section><section id="section14"><h2>14. A practical index-design checklist</h2><ol><li>Start with a specific frequent or expensive query.</li><li>Identify equality conditions, ranges, join columns, requested ordering, and returned columns.</li><li>Inspect existing indexes and constraints for overlap.</li><li>Choose a candidate key order that matches the query pattern.</li><li>Include extra returned columns only when coverage is worth the added size.</li><li>Compare the actual plan and logical reads on representative data.</li><li>Check the effect on writes and other important queries.</li><li>Keep the indexes that earn their cost; remove redundant candidates carefully.</li></ol><div class="tablewrap"><table><thead><tr><th>Query pattern</th><th>Candidate</th></tr></thead><tbody><tr><td>Lookup by OrderID</td><td>Existing ORDERS clustered primary key.</td></tr><tr><td>One customer's date range</td><td>ORDERS(CustomerID, OrderDate).</td></tr><tr><td>Date range across customers</td><td>ORDERS(OrderDate, CustomerID), or a narrower OrderDate index according to the query.</td></tr><tr><td>Category search returning title and price</td><td>BOOKS(Category) INCLUDE (Title, Price).</td></tr><tr><td>Details for one order</td><td>Existing ORDER_DETAILS(OrderID, BookID) clustered key.</td></tr><tr><td>Sales lines for one book</td><td>ORDER_DETAILS(BookID) INCLUDE (Quantity, UnitPrice, Discount).</td></tr></tbody></table></div></section><section id="section15"><h2>15. Practice questions and explained answers</h2><p>Each answer appears directly beneath its question. Click its heading to collapse it. SQL creation answers are optional extensions and should be run once in the same lab database.</p><article class="qa"><h3>Question 1</h3><p>Why can an index make a customer lookup faster?</p><details open><summary>Answer and explanation</summary><p>It supplies an ordered search path to matching keys, which can reduce pages read. The benefit depends on selectivity, coverage, table size, and the chosen plan.</p></details></article><article class="qa"><h3>Question 2</h3><p>Can one rowstore table have two clustered indexes?</p><details open><summary>Answer and explanation</summary><p>No. It has one clustered organization, or it is a heap. It can have multiple nonclustered indexes.</p></details></article><article class="qa"><h3>Question 3</h3><p>Is a composite index always nonclustered?</p><details open><summary>Answer and explanation</summary><p>No. Composite describes the number of key columns. ORDER_DETAILS has a composite clustered primary key; the customer/date index is composite and nonclustered.</p></details></article><article class="qa"><h3>Question 4</h3><p>Create an index for finding books by AuthorName.</p><details open><summary>Answer and explanation</summary><p>A nonclustered key on AuthorName provides a candidate author-search path. Run this new index once after setup.</p><pre><code>CREATE NONCLUSTERED INDEX IX_BOOKS_AuthorName
+ON dbo.BOOKS (AuthorName);
+SELECT BookID, Title FROM dbo.BOOKS
+WHERE AuthorName = &#x27;Anita Rao&#x27;;</code></pre></details></article><article class="qa"><h3>Question 5</h3><p>What results should the previous author query return?</p><details open><summary>Answer and explanation</summary><p>Book 101, Python Foundations, and book 103, Learning C Sharp. Without ORDER BY their display order is not guaranteed.</p></details></article><article class="qa"><h3>Question 6</h3><p>Design an index for one salesperson within one store. Return OrderID and OrderDate.</p><details open><summary>Answer and explanation</summary><p>An equality key on store followed by salesperson is suitable for this pattern. OrderDate is payload; OrderID is already the clustering locator.</p><pre><code>CREATE NONCLUSTERED INDEX IX_ORDERS_StoreLocation_Salesperson
+ON dbo.ORDERS (StoreLocation, Salesperson)
+INCLUDE (OrderDate);
+SELECT OrderID, OrderDate FROM dbo.ORDERS
+WHERE StoreLocation = &#x27;Vancouver&#x27; AND Salesperson = &#x27;Priya&#x27;;</code></pre></details></article><article class="qa"><h3>Question 7</h3><p>Does (CustomerID, OrderDate) efficiently support every date-only search?</p><details open><summary>Answer and explanation</summary><p>It is organized by customer first, so a date-only condition usually cannot seek a single contiguous date range. SQL Server might still scan that index. A date-leading index is a more direct candidate.</p></details></article><article class="qa"><h3>Question 8</h3><p>Why are (CustomerID, OrderDate) and (OrderDate, CustomerID) different?</p><details open><summary>Answer and explanation</summary><p>They have different leading ranges. One favors a customer history; the other favors searching a date interval across customers.</p></details></article><article class="qa"><h3>Question 9</h3><p>An index has key Category and INCLUDE (Title, Price). Is Price a seek key?</p><details open><summary>Answer and explanation</summary><p>No. It is leaf payload. It can cover a query but does not establish Price key order.</p></details></article><article class="qa"><h3>Question 10</h3><p>Create a covering index for searches by author that return Title and Price.</p><details open><summary>Answer and explanation</summary><p>Replace the author index from Question 4 rather than adding a duplicate author key. BookID is available through the clustered locator.</p><pre><code>CREATE NONCLUSTERED INDEX IX_BOOKS_AuthorName
+ON dbo.BOOKS (AuthorName) INCLUDE (Title, Price)
+WITH (DROP_EXISTING = ON);</code></pre></details></article><article class="qa"><h3>Question 11</h3><p>What is a Key Lookup, and how can coverage help?</p><details open><summary>Answer and explanation</summary><p>A Key Lookup retrieves columns missing from a nonclustered access path from clustered rows. Including necessary output columns can eliminate those lookups for the target query; the resulting index still has storage and write costs.</p></details></article><article class="qa"><h3>Question 12</h3><p>Does creating a foreign key automatically index its referencing columns?</p><details open><summary>Answer and explanation</summary><p>No. Inspect the referencing table and add a useful index only if the workload benefits. A suitable existing composite index may already start with the foreign-key column.</p></details></article><article class="qa"><h3>Question 13</h3><p>Rewrite a query that filters WHERE YEAR(OrderDate) = 2026 into a direct range.</p><details open><summary>Answer and explanation</summary><p>Use a half-open range. This also remains correct if the column later becomes a date/time type.</p><pre><code>SELECT OrderID, OrderDate FROM dbo.ORDERS
+WHERE OrderDate &gt;= &#x27;20260101&#x27; AND OrderDate &lt; &#x27;20270101&#x27;;</code></pre></details></article><article class="qa"><h3>Question 14</h3><p>A query uses an index scan. Is that automatically a bad plan?</p><details open><summary>Answer and explanation</summary><p>No. A scan can be cheaper for a small table, a broad result, or a narrow covering index. Evaluate rows read, logical reads, estimates, and actual workload costs.</p></details></article><article class="qa"><h3>Question 15</h3><p>Does an index guarantee that SELECT results appear in index-key order?</p><details open><summary>Answer and explanation</summary><p>No. Use ORDER BY explicitly. A plan can choose a different path or use parallel operations.</p></details></article><article class="qa"><h3>Question 16</h3><p>What does the ORDER_DETAILS primary key (OrderID, BookID) enforce?</p><details open><summary>Answer and explanation</summary><p>The complete pair must be unique and both columns are non-NULL. A book can appear in multiple orders. An order can contain multiple different books.</p></details></article><article class="qa"><h3>Question 17</h3><p>What happens if a second index is created with the same name on the same table?</p><details open><summary>Answer and explanation</summary><p>Creation fails unless an appropriate replacement option is used. Run creation examples once; the Category and AuthorName covering examples use DROP_EXISTING to replace their previous definitions.</p></details></article><article class="qa"><h3>Question 18</h3><p>Why not index every column?</p><details open><summary>Answer and explanation</summary><p>That increases storage and the work required by writes. Many indexes may overlap or offer little benefit. Design around measured query patterns.</p></details></article><article class="qa"><h3>Question 19</h3><p>How do you verify that the performance-lab index helps?</p><details open><summary>Answer and explanation</summary><p>Run the same query before and after, enable the actual execution plan, and compare STATISTICS IO logical reads and timing. Both results must return 100 rows. Do not invent a speedup percentage from the tiny sample.</p></details></article><article class="qa"><h3>Question 20</h3><p>What index would you start with for a query WHERE Category = ... AND Price &gt;= ... ORDER BY Price?</p><details open><summary>Answer and explanation</summary><p>Consider the composite key (Category, Price): equality on Category followed by a price range can fit the requested order. Include Title if it is returned. Validate its value against the existing Category index before keeping both.</p><pre><code>CREATE NONCLUSTERED INDEX IX_BOOKS_Category_Price
+ON dbo.BOOKS (Category, Price) INCLUDE (Title);
+SELECT BookID, Title, Price FROM dbo.BOOKS
+WHERE Category = &#x27;Database&#x27; AND Price &gt;= 50.00
+ORDER BY Price;</code></pre></details></article><article class="qa"><h3>Question 21</h3><p>Can ROLLUP, CUBE, or RANK queries benefit from indexes?</p><details open><summary>Answer and explanation</summary><p>Sometimes. Indexes can reduce input through filters, cover needed columns, or provide useful ordering. Full-table aggregation may still need a scan. An index does not compute the final subtotal or rank for every query automatically.</p></details></article><article class="qa"><h3>Question 22</h3><p>Remove only the secondary author index created in the questions.</p><details open><summary>Answer and explanation</summary><p>DROP INDEX removes the index, not the books. Do not drop the BOOKS primary-key constraint for this task.</p><pre><code>DROP INDEX IX_BOOKS_AuthorName ON dbo.BOOKS;</code></pre></details></article></section><section id="section16"><h2>16. Microsoft documentation</h2><ul><li><a href="https://learn.microsoft.com/en-us/sql/relational-databases/indexes/clustered-and-nonclustered-indexes-described">Clustered and nonclustered indexes</a></li><li><a href="https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-index-design-guide">SQL Server index architecture and design guide</a></li><li><a href="https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql">CREATE INDEX syntax</a></li><li><a href="https://learn.microsoft.com/en-us/sql/relational-databases/indexes/create-indexes-with-included-columns">Indexes with included columns</a></li><li><a href="https://learn.microsoft.com/en-us/sql/t-sql/statements/set-statistics-io-transact-sql">SET STATISTICS IO</a></li><li><a href="https://learn.microsoft.com/en-us/sql/relational-databases/performance/display-an-actual-execution-plan">Display an actual execution plan</a></li></ul></section></main></body></html>
