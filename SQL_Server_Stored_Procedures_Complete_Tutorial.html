@@ -1,0 +1,484 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SQL Server Stored Procedures — Hands-on Tutorial</title><style>:root{--ink:#17243a;--muted:#52627a;--blue:#175cd3;--bg:#f6f8fc;--line:#dce4ef;--soft:#eaf2ff}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 system-ui,Segoe UI,Arial,sans-serif}main{max-width:1040px;margin:auto;padding:26px 22px 80px}header{background:linear-gradient(110deg,#e8f1ff,#fff);border:1px solid var(--line);border-radius:16px;padding:28px}h1{font-size:2rem;line-height:1.2;margin:0 0 8px}h2{font-size:1.45rem;margin:0 0 14px;border-bottom:2px solid #e6edf6;padding-bottom:8px}h3{font-size:1.1rem;margin:20px 0 8px}p{margin:8px 0 13px}.muted{color:var(--muted)}nav{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}nav a{background:#fff;border:1px solid var(--line);padding:6px 10px;border-radius:9px;color:var(--blue);text-decoration:none;font-size:.9rem}section{background:white;border:1px solid var(--line);border-radius:14px;padding:24px;margin:20px 0;box-shadow:0 2px 8px #1c36520a}pre{background:#f1f5fa;color:#1c304e;border:1px solid #d7e1ef;border-radius:10px;padding:16px;overflow-x:auto;font:14px/1.55 Consolas,Monaco,monospace;white-space:pre}code{font-family:Consolas,Monaco,monospace}p code,li code{background:#eef3fa;padding:1px 4px;border-radius:4px}.note{background:#eff6ff;border-left:4px solid #3b82f6;padding:12px 16px;margin:12px 0}.warning{background:#fff7e8;border-left:4px solid #e9a23b;padding:12px 16px;margin:12px 0}table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid var(--line);padding:9px 11px;text-align:left}th{background:#edf3fc}details{border:1px solid var(--line);border-radius:9px;margin:10px 0;padding:10px 14px;background:#fbfdff}summary{cursor:pointer;font-weight:650;color:#194e9c}button{border:1px solid #b9cce6;background:#fff;color:#1752a4;border-radius:7px;padding:7px 11px;cursor:pointer;font-weight:600}button:hover{background:#eaf2ff}.codehead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:13px 0 -6px}.codehead strong{font-size:.92rem}.quizitem{padding:15px;border:1px solid var(--line);border-radius:10px;margin:12px 0}.quizitem label{display:block;margin:5px 0}.feedback{margin-top:9px;font-weight:600}.good{color:#147343}.bad{color:#a04420}.small{font-size:.9rem}.tag{display:inline-block;background:#dbeafe;color:#174ea6;padding:3px 9px;border-radius:20px;font-size:.82rem}ol li{margin:6px 0}@media print{body{background:#fff}section{break-inside:avoid;box-shadow:none}button,nav{display:none}details{break-inside:avoid}main{padding:0}}</style></head><body><main><header><h1>Stored Procedures</h1><p>Non-parameterized procedures · Input and output parameters · Default parameters · Nested procedures · CRUD · Error handling · Transactions · Practice · Interactive quiz · Worked solutions</p><p class="muted">Use SQL Server Management Studio (SSMS) or Azure Data Studio with a SQL Server connection. Work through the examples in order.</p></header><nav><a href="#setup">Setup</a><a href="#basics">Basics</a><a href="#nonparam">No parameters</a><a href="#param">Parameters</a><a href="#crud">CRUD</a><a href="#nested">Nested procedures</a><a href="#advanced">Advanced</a><a href="#practice">Exercises</a><a href="#quiz">Quiz</a><a href="#solutions">Solutions</a></nav>
+<section id="setup"><h2>1. Setup: Create a safe practice database</h2><p><strong>Step 1.</strong> Open SSMS, connect to a SQL Server instance, and select <strong>New Query</strong>. Run the following batch. This tutorial uses its own database, <code>StoredProcLab</code>.</p><pre>IF DB_ID('StoredProcLab') IS NULL
+    CREATE DATABASE StoredProcLab;
+GO
+USE StoredProcLab;
+GO
+
+IF OBJECT_ID('dbo.Students', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Students (
+        StudentID INT PRIMARY KEY,
+        StudentName VARCHAR(60) NOT NULL,
+        Age INT NOT NULL CHECK (Age BETWEEN 1 AND 120),
+        Major VARCHAR(60) NOT NULL,
+        GPA DECIMAL(3,2) NOT NULL CHECK (GPA BETWEEN 0 AND 4)
+    );
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Students)
+BEGIN
+    INSERT INTO dbo.Students
+        (StudentID, StudentName, Age, Major, GPA)
+    VALUES
+        (101, 'Ana', 20, 'Computer Science', 3.80),
+        (102, 'Ben', 21, 'Mathematics', 3.40),
+        (103, 'Cara', 22, 'Computer Science', 3.95),
+        (104, 'David', 19, 'Business', 3.10),
+        (105, 'Eva', 23, 'Mathematics', 3.70),
+        (106, 'Frank', 21, 'Physics', 3.20);
+END;
+GO
+SELECT * FROM dbo.Students ORDER BY StudentID;</pre><p><strong>Expected:</strong> Six student rows. <code>StudentID</code> is unique; <code>GPA</code> stores values from 0.00 through 4.00.</p><div class="note"><strong>About GO:</strong> <code>GO</code> is a batch separator understood by SSMS and other SQL tools, not a SQL Server statement. A <code>CREATE OR ALTER PROCEDURE</code> statement must begin its own batch, so the examples use <code>GO</code> between procedure definitions.</div></section>
+<section id="basics"><h2>2. What is a stored procedure?</h2><p>A stored procedure is a named, saved collection of T-SQL statements in a database. You can execute it repeatedly without rewriting its statements. Procedures can return result sets, modify rows, call other procedures, and accept parameters.</p><table><tr><th>Regular query</th><th>Stored procedure</th></tr><tr><td>Write <code>SELECT * FROM dbo.Students;</code> each time.</td><td>Create <code>dbo.GetAllStudents</code> once; run <code>EXEC dbo.GetAllStudents;</code> later.</td></tr><tr><td>SQL is submitted directly.</td><td>SQL is saved in the database under a procedure name.</td></tr></table><h3>Basic syntax</h3><pre>CREATE OR ALTER PROCEDURE dbo.ProcedureName
+AS
+BEGIN
+    SET NOCOUNT ON;
+    -- SQL statements go here
+END;
+GO
+
+EXEC dbo.ProcedureName;</pre><p><code>CREATE OR ALTER</code> creates a missing procedure or updates an existing one. <code>SET NOCOUNT ON</code> suppresses extra “N rows affected” messages; it does not suppress actual SELECT results. <code>dbo</code> is the schema name.</p></section>
+<section id="nonparam"><h2>3. Non-parameterized procedures (no input needed)</h2><p>A <strong>non-parameterized procedure</strong> has no parameters. Each execution performs the same defined task, although results can change as table data changes.</p><h3>Example 1: Return all students</h3><pre>CREATE OR ALTER PROCEDURE dbo.GetAllStudents
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT StudentID, StudentName, Age, Major, GPA
+    FROM dbo.Students
+    ORDER BY StudentID;
+END;
+GO
+EXEC dbo.GetAllStudents;</pre><p><strong>Expected:</strong> Six students, ordered by ID.</p><h3>Example 2: Count students</h3><pre>CREATE OR ALTER PROCEDURE dbo.CountStudents
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT COUNT(*) AS TotalStudents FROM dbo.Students;
+END;
+GO
+EXEC dbo.CountStudents;</pre><p><strong>Expected:</strong> <code>TotalStudents = 6</code> before any data-changing examples.</p><h3>Example 3: Show honor-roll students</h3><pre>CREATE OR ALTER PROCEDURE dbo.GetHonorRoll
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT StudentName, GPA
+    FROM dbo.Students
+    WHERE GPA &gt;= 3.70
+    ORDER BY GPA DESC;
+END;
+GO
+EXEC dbo.GetHonorRoll;</pre><p><strong>Expected:</strong> Cara (3.95), Ana (3.80), Eva (3.70).</p><h3>Example 4: Group by major</h3><pre>CREATE OR ALTER PROCEDURE dbo.CountByMajor
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT Major, COUNT(*) AS StudentCount
+    FROM dbo.Students
+    GROUP BY Major
+    ORDER BY Major;
+END;
+GO
+EXEC dbo.CountByMajor;</pre><p><strong>Expected:</strong> Business 1, Computer Science 2, Mathematics 2, Physics 1.</p><h3>Example 5: Return two result sets</h3><pre>CREATE OR ALTER PROCEDURE dbo.StudentDashboard
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT COUNT(*) AS TotalStudents FROM dbo.Students;
+    SELECT Major, AVG(GPA) AS AverageGPA
+    FROM dbo.Students GROUP BY Major;
+END;
+GO
+EXEC dbo.StudentDashboard;</pre><p><strong>Observe:</strong> SSMS displays two separate results grids: one overall count and one GPA summary.</p></section>
+<section id="param"><h2>4. Parameterized procedures</h2><p>A <strong>parameterized procedure</strong> accepts values from the caller. Parameters begin with <code>@</code> and have declared SQL data types.</p><h3>Example 6: Search by student ID (INT parameter)</h3><pre>CREATE OR ALTER PROCEDURE dbo.GetStudentByID
+    @StudentID INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT * FROM dbo.Students
+    WHERE StudentID = @StudentID;
+END;
+GO
+EXEC dbo.GetStudentByID @StudentID = 103;
+EXEC dbo.GetStudentByID @StudentID = 101;</pre><p><strong>Expected:</strong> The first call returns Cara; the second returns Ana. <code>@StudentID</code> is an input parameter, not a table column.</p><h3>Example 7: Search by major (text parameter)</h3><pre>CREATE OR ALTER PROCEDURE dbo.GetStudentsByMajor
+    @MajorName VARCHAR(60)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT StudentName, Major, GPA
+    FROM dbo.Students
+    WHERE Major = @MajorName;
+END;
+GO
+EXEC dbo.GetStudentsByMajor @MajorName = 'Mathematics';</pre><p><strong>Expected:</strong> Ben and Eva.</p><h3>Example 8: Two input parameters</h3><pre>CREATE OR ALTER PROCEDURE dbo.FindStudents
+    @MajorName VARCHAR(60),
+    @MinimumAge INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT StudentName, Age, Major
+    FROM dbo.Students
+    WHERE Major = @MajorName AND Age &gt;= @MinimumAge;
+END;
+GO
+EXEC dbo.FindStudents
+    @MajorName = 'Computer Science',
+    @MinimumAge = 21;</pre><p><strong>Expected:</strong> Cara only. Ana is 20.</p><h3>Example 9: Optional/default parameter</h3><pre>CREATE OR ALTER PROCEDURE dbo.GetStudentsAboveGPA
+    @MinimumGPA DECIMAL(3,2) = 3.50
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT StudentName, GPA FROM dbo.Students
+    WHERE GPA &gt;= @MinimumGPA
+    ORDER BY GPA DESC;
+END;
+GO
+EXEC dbo.GetStudentsAboveGPA;                 -- Uses 3.50
+EXEC dbo.GetStudentsAboveGPA @MinimumGPA = 3.90;</pre><p><strong>Expected:</strong> First call returns Cara, Ana, Eva. Second returns Cara only.</p><h3>Example 10: OUTPUT parameter</h3><p>An <code>OUTPUT</code> parameter sends a value back to the caller. Declare a variable in the calling batch and pass it using <code>OUTPUT</code>.</p><pre>CREATE OR ALTER PROCEDURE dbo.GetMajorStudentCount
+    @MajorName VARCHAR(60),
+    @Total INT OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT @Total = COUNT(*)
+    FROM dbo.Students
+    WHERE Major = @MajorName;
+END;
+GO
+DECLARE @Result INT;
+EXEC dbo.GetMajorStudentCount
+    @MajorName = 'Mathematics',
+    @Total = @Result OUTPUT;
+SELECT @Result AS MathematicsStudents;</pre><p><strong>Expected:</strong> <code>MathematicsStudents = 2</code>.</p><h3>Example 11: Input and OUTPUT parameters together</h3><pre>CREATE OR ALTER PROCEDURE dbo.GetAverageGPAForMajor
+    @MajorName VARCHAR(60),
+    @AverageGPA DECIMAL(4,2) OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT @AverageGPA = AVG(GPA)
+    FROM dbo.Students WHERE Major = @MajorName;
+END;
+GO
+DECLARE @Avg DECIMAL(4,2);
+EXEC dbo.GetAverageGPAForMajor
+    @MajorName = 'Computer Science',
+    @AverageGPA = @Avg OUTPUT;
+SELECT @Avg AS AverageGPA;</pre><p><strong>Expected:</strong> The average of 3.80 and 3.95, displayed rounded to two decimal places according to SQL Server's decimal conversion rules.</p><div class="note"><strong>Compare:</strong> A <code>SELECT</code> inside a procedure returns a result set; an <code>OUTPUT</code> parameter returns a value through a caller-supplied variable. They are different mechanisms.</div></section>
+<section id="crud"><h2>5. Stored procedures for INSERT, UPDATE, DELETE (CRUD)</h2><p>CRUD stands for Create, Read, Update, Delete. The earlier SELECT procedures demonstrate reading. Now practice modifying data. Run these examples in order.</p><h3>Example 12: Insert a student</h3><pre>CREATE OR ALTER PROCEDURE dbo.AddStudent
+    @StudentID INT,
+    @StudentName VARCHAR(60),
+    @Age INT,
+    @Major VARCHAR(60),
+    @GPA DECIMAL(3,2)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    INSERT INTO dbo.Students
+        (StudentID, StudentName, Age, Major, GPA)
+    VALUES
+        (@StudentID, @StudentName, @Age, @Major, @GPA);
+END;
+GO
+EXEC dbo.AddStudent
+    @StudentID = 107, @StudentName = 'Grace',
+    @Age = 20, @Major = 'Physics', @GPA = 3.60;
+SELECT * FROM dbo.Students WHERE StudentID = 107;</pre><p><strong>Expected:</strong> Grace is added. Running the same INSERT again will fail because <code>StudentID</code> is a primary key.</p><h3>Example 13: Update a student's major</h3><pre>CREATE OR ALTER PROCEDURE dbo.ChangeStudentMajor
+    @StudentID INT,
+    @NewMajor VARCHAR(60)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE dbo.Students
+    SET Major = @NewMajor
+    WHERE StudentID = @StudentID;
+END;
+GO
+EXEC dbo.ChangeStudentMajor
+    @StudentID = 107, @NewMajor = 'Mathematics';
+SELECT * FROM dbo.Students WHERE StudentID = 107;</pre><p><strong>Expected:</strong> Grace's major becomes Mathematics.</p><h3>Example 14: Delete a student</h3><pre>CREATE OR ALTER PROCEDURE dbo.RemoveStudent
+    @StudentID INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM dbo.Students
+    WHERE StudentID = @StudentID;
+END;
+GO
+EXEC dbo.RemoveStudent @StudentID = 107;
+SELECT * FROM dbo.Students WHERE StudentID = 107;</pre><p><strong>Expected:</strong> No rows returned for ID 107. Other students remain.</p><div class="warning"><strong>Safety:</strong> A DELETE or UPDATE without an appropriate <code>WHERE</code> clause can affect every row. Use the practice database only. Production procedures need permission controls, validation, and often transactions.</div></section>
+<section id="nested"><h2>6. Nested stored procedures: one procedure calls another</h2><p>A <strong>nested stored procedure</strong> is a procedure executed from within another procedure. This is useful for reusing existing database operations.</p><h3>Example 15: A procedure calls a non-parameterized procedure</h3><p>First, ensure <code>dbo.CountStudents</code> exists from Example 2. Now create another procedure that calls it.</p><pre>CREATE OR ALTER PROCEDURE dbo.ShowCollegeSummary
+AS
+BEGIN
+    SET NOCOUNT ON;
+    PRINT 'College summary begins';
+    EXEC dbo.CountStudents;
+    PRINT 'College summary ends';
+END;
+GO
+EXEC dbo.ShowCollegeSummary;</pre><p><strong>Execution flow:</strong> <code>ShowCollegeSummary → CountStudents → SELECT COUNT(*) → return to ShowCollegeSummary</code>. The Messages tab shows PRINT output; the Results tab shows the count.</p><h3>Example 16: A parent passes parameters to a child</h3><p>First, use the existing <code>GetStudentsByMajor</code> procedure from Example 7. Then create a parent procedure.</p><pre>CREATE OR ALTER PROCEDURE dbo.MajorReport
+    @RequestedMajor VARCHAR(60)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    PRINT 'Showing selected major';
+    EXEC dbo.GetStudentsByMajor
+        @MajorName = @RequestedMajor;
+END;
+GO
+EXEC dbo.MajorReport @RequestedMajor = 'Physics';</pre><p><strong>Expected:</strong> Frank's record. The parent receives <code>@RequestedMajor</code> and passes its value to the child parameter <code>@MajorName</code>.</p><h3>Example 17: Three-level nesting</h3><pre>CREATE OR ALTER PROCEDURE dbo.LevelOne
+AS
+BEGIN
+    PRINT 'Level 1: start';
+    EXEC dbo.LevelTwo;
+    PRINT 'Level 1: end';
+END;
+GO
+CREATE OR ALTER PROCEDURE dbo.LevelTwo
+AS
+BEGIN
+    PRINT 'Level 2: start';
+    EXEC dbo.LevelThree;
+    PRINT 'Level 2: end';
+END;
+GO
+CREATE OR ALTER PROCEDURE dbo.LevelThree
+AS
+BEGIN
+    PRINT 'Level 3: running';
+END;
+GO
+EXEC dbo.LevelOne;</pre><p><strong>Expected Messages order:</strong> Level 1: start → Level 2: start → Level 3: running → Level 2: end → Level 1: end.</p><h3>Example 18: Nested procedure with OUTPUT value</h3><pre>CREATE OR ALTER PROCEDURE dbo.ShowMajorCountMessage
+    @MajorName VARCHAR(60)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @NumberOfStudents INT;
+    EXEC dbo.GetMajorStudentCount
+        @MajorName = @MajorName,
+        @Total = @NumberOfStudents OUTPUT;
+    SELECT @MajorName AS Major,
+           @NumberOfStudents AS StudentCount;
+END;
+GO
+EXEC dbo.ShowMajorCountMessage @MajorName = 'Mathematics';</pre><p><strong>Expected:</strong> Mathematics, 2. The child fills the output variable; the parent uses it.</p><div class="note"><strong>Important:</strong> SQL Server supports nesting stored procedures up to 32 levels. A stored procedure is not the same as a SQL function; a procedure is normally invoked with <code>EXEC</code>, not embedded directly inside a SELECT expression.</div></section>
+<section id="advanced"><h2>7. Useful additional techniques</h2><h3>Example 19: Change an existing procedure</h3><pre>ALTER PROCEDURE dbo.GetAllStudents
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT StudentID, StudentName, Age, Major, GPA
+    FROM dbo.Students
+    ORDER BY StudentName ASC;
+END;
+GO
+EXEC dbo.GetAllStudents;</pre><p><strong>Expected:</strong> Students ordered alphabetically by name. <code>ALTER</code> modifies the procedure definition without recreating the Students table.</p><h3>Example 20: IF / ELSE inside a procedure</h3><pre>CREATE OR ALTER PROCEDURE dbo.CheckStudentExists
+    @StudentID INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF EXISTS (SELECT 1 FROM dbo.Students
+               WHERE StudentID = @StudentID)
+        SELECT 'Student found' AS Message;
+    ELSE
+        SELECT 'Student not found' AS Message;
+END;
+GO
+EXEC dbo.CheckStudentExists @StudentID = 101;
+EXEC dbo.CheckStudentExists @StudentID = 999;</pre><p><strong>Expected:</strong> “Student found”, then “Student not found”.</p><h3>Example 21: TRY / CATCH and THROW</h3><pre>CREATE OR ALTER PROCEDURE dbo.AddStudentSafely
+    @StudentID INT,
+    @StudentName VARCHAR(60),
+    @Age INT,
+    @Major VARCHAR(60),
+    @GPA DECIMAL(3,2)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRY
+        INSERT INTO dbo.Students
+            (StudentID, StudentName, Age, Major, GPA)
+        VALUES
+            (@StudentID, @StudentName, @Age, @Major, @GPA);
+    END TRY
+    BEGIN CATCH
+        PRINT 'Insert failed: ' + ERROR_MESSAGE();
+        THROW;
+    END CATCH;
+END;
+GO
+-- Intentional duplicate-key error for demonstration:
+EXEC dbo.AddStudentSafely
+    @StudentID = 101, @StudentName = 'Duplicate',
+    @Age = 20, @Major = 'Physics', @GPA = 3.00;</pre><p><strong>Expected:</strong> A duplicate primary-key error. The CATCH block prints the error and <code>THROW</code> passes it to the caller. No duplicate row is inserted.</p><h3>Example 22: Transaction with two updates</h3><p>For a realistic example, transfer points between two accounts. Both updates must succeed together.</p><pre>IF OBJECT_ID('dbo.PointAccounts', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.PointAccounts (
+        AccountID INT PRIMARY KEY,
+        Points INT NOT NULL CHECK (Points &gt;= 0)
+    );
+    INSERT INTO dbo.PointAccounts VALUES (1, 100), (2, 50);
+END;
+GO
+CREATE OR ALTER PROCEDURE dbo.TransferPoints
+    @FromID INT,
+    @ToID INT,
+    @Amount INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+    IF @Amount &lt;= 0 OR @FromID = @ToID
+        THROW 50001, 'Invalid transfer request.', 1;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+        UPDATE dbo.PointAccounts
+        SET Points = Points - @Amount
+        WHERE AccountID = @FromID AND Points &gt;= @Amount;
+        IF @@ROWCOUNT &lt;&gt; 1
+            THROW 50002, 'Source missing or insufficient points.', 1;
+        UPDATE dbo.PointAccounts
+        SET Points = Points + @Amount
+        WHERE AccountID = @ToID;
+        IF @@ROWCOUNT &lt;&gt; 1
+            THROW 50003, 'Destination account not found.', 1;
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE() &lt;&gt; 0 ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH;
+END;
+GO
+EXEC dbo.TransferPoints @FromID = 1, @ToID = 2, @Amount = 20;
+SELECT * FROM dbo.PointAccounts ORDER BY AccountID;</pre><p><strong>Expected on first execution:</strong> Account 1 = 80; Account 2 = 70. The transaction prevents partial completion if an update fails.</p><h3>Example 23: Return status with RETURN</h3><pre>CREATE OR ALTER PROCEDURE dbo.IsStudentPresent
+    @StudentID INT
+AS
+BEGIN
+    IF EXISTS (SELECT 1 FROM dbo.Students
+               WHERE StudentID = @StudentID)
+        RETURN 0;
+    RETURN 1;
+END;
+GO
+DECLARE @Status INT;
+EXEC @Status = dbo.IsStudentPresent @StudentID = 999;
+SELECT @Status AS StatusCode;</pre><p><strong>Expected:</strong> 1 means not found in this example; 0 means found. <code>RETURN</code> is commonly used for integer status codes, whereas OUTPUT parameters return values.</p><h3>Example 24: Inspect and remove a procedure</h3><pre>-- Inspect the procedure definition:
+EXEC sys.sp_helptext N'dbo.GetAllStudents';
+GO
+-- Remove an example procedure (not the student table):
+DROP PROCEDURE IF EXISTS dbo.LevelOne;
+GO</pre><p>In SSMS Object Explorer: <strong>Databases → StoredProcLab → Programmability → Stored Procedures</strong>. Refresh the folder if your new procedure is not visible.</p></section>
+<section id="practice"><h2>8. Hands-on practice: attempt before viewing solutions</h2><p>Use the six original student records. The insert/update/delete examples above restore the Students table to those six rows when followed in order. Each exercise should include <strong>CREATE OR ALTER</strong>, <strong>EXEC</strong>, and a way to verify the result.</p><ol><li><strong>Non-parameterized:</strong> Create <code>dbo.ListYoungStudents</code> to return students younger than 21.</li><li><strong>Non-parameterized:</strong> Create <code>dbo.ShowAverageAge</code> to display average student age with a decimal result.</li><li><strong>One parameter:</strong> Create <code>dbo.FindByMinimumGPA</code> to retrieve students whose GPA is at least a supplied value.</li><li><strong>Two parameters:</strong> Create <code>dbo.FindByMajorAndGPA</code> that filters by major and minimum GPA.</li><li><strong>Default parameter:</strong> Create <code>dbo.FindByAge</code> with a default minimum age of 21.</li><li><strong>OUTPUT parameter:</strong> Create <code>dbo.GetMaximumGPA</code> that sends the maximum GPA into a caller variable.</li><li><strong>Nested:</strong> Create <code>dbo.RunHonorRollReport</code> that prints a message and calls the existing <code>dbo.GetHonorRoll</code>.</li><li><strong>Nested with input:</strong> Create <code>dbo.RunMajorReport</code> that accepts a major and calls <code>dbo.GetStudentsByMajor</code>.</li><li><strong>INSERT:</strong> Create <code>dbo.AddPracticeStudent</code> and insert student 108, Ivy, age 20, Business, GPA 3.50.</li><li><strong>UPDATE:</strong> Create <code>dbo.UpdatePracticeGPA</code> and update Ivy's GPA to 3.90.</li><li><strong>DELETE:</strong> Create <code>dbo.DeletePracticeStudent</code> and delete Ivy using ID 108.</li><li><strong>Reasoning:</strong> Explain why a nested procedure can be useful and how an OUTPUT parameter differs from a SELECT result set.</li></ol></section>
+<section id="quiz"><h2>9. Interactive concept quiz</h2><p>Choose an answer for each question, then select <strong>Check answers</strong>. Feedback explains the reasoning. You can retry as often as you like.</p><div id="quizitems"></div><button id="checkQuiz" type="button">Check answers</button> <button id="resetQuiz" type="button">Reset quiz</button><p id="quizscore" aria-live="polite"></p></section>
+<section id="solutions"><h2>10. Worked solutions to the practice exercises</h2><p>Open each solution after attempting the task. Each block includes a procedure definition and an example execution.</p>
+<details><summary>Solution 1 — ListYoungStudents</summary><pre>CREATE OR ALTER PROCEDURE dbo.ListYoungStudents
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT * FROM dbo.Students WHERE Age &lt; 21;
+END;
+GO
+EXEC dbo.ListYoungStudents;</pre><p>Ana (20) and David (19) are returned.</p></details>
+<details><summary>Solution 2 — ShowAverageAge</summary><pre>CREATE OR ALTER PROCEDURE dbo.ShowAverageAge
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT AVG(CAST(Age AS DECIMAL(6,2))) AS AverageAge
+    FROM dbo.Students;
+END;
+GO
+EXEC dbo.ShowAverageAge;</pre><p>The original ages sum to 126; 126 ÷ 6 = 21.00. Casting avoids integer-only averaging.</p></details>
+<details><summary>Solution 3 — FindByMinimumGPA</summary><pre>CREATE OR ALTER PROCEDURE dbo.FindByMinimumGPA
+    @MinimumGPA DECIMAL(3,2)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT StudentName, GPA FROM dbo.Students
+    WHERE GPA &gt;= @MinimumGPA;
+END;
+GO
+EXEC dbo.FindByMinimumGPA @MinimumGPA = 3.80;</pre><p>Returns Ana and Cara.</p></details>
+<details><summary>Solution 4 — FindByMajorAndGPA</summary><pre>CREATE OR ALTER PROCEDURE dbo.FindByMajorAndGPA
+    @Major VARCHAR(60),
+    @MinGPA DECIMAL(3,2)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT * FROM dbo.Students
+    WHERE Major = @Major AND GPA &gt;= @MinGPA;
+END;
+GO
+EXEC dbo.FindByMajorAndGPA
+    @Major = 'Mathematics', @MinGPA = 3.50;</pre><p>Returns Eva only.</p></details>
+<details><summary>Solution 5 — FindByAge (default)</summary><pre>CREATE OR ALTER PROCEDURE dbo.FindByAge
+    @MinimumAge INT = 21
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT * FROM dbo.Students WHERE Age &gt;= @MinimumAge;
+END;
+GO
+EXEC dbo.FindByAge;
+EXEC dbo.FindByAge @MinimumAge = 23;</pre><p>First call uses 21. Second call returns Eva (23).</p></details>
+<details><summary>Solution 6 — GetMaximumGPA (OUTPUT)</summary><pre>CREATE OR ALTER PROCEDURE dbo.GetMaximumGPA
+    @Maximum DECIMAL(3,2) OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT @Maximum = MAX(GPA) FROM dbo.Students;
+END;
+GO
+DECLARE @Highest DECIMAL(3,2);
+EXEC dbo.GetMaximumGPA @Maximum = @Highest OUTPUT;
+SELECT @Highest AS HighestGPA;</pre><p>Returns 3.95 (Cara).</p></details>
+<details><summary>Solution 7 — RunHonorRollReport (nested)</summary><pre>CREATE OR ALTER PROCEDURE dbo.RunHonorRollReport
+AS
+BEGIN
+    SET NOCOUNT ON;
+    PRINT 'Honor roll report';
+    EXEC dbo.GetHonorRoll;
+END;
+GO
+EXEC dbo.RunHonorRollReport;</pre><p>The parent calls the previously created child procedure.</p></details>
+<details><summary>Solution 8 — RunMajorReport (nested with input)</summary><pre>CREATE OR ALTER PROCEDURE dbo.RunMajorReport
+    @Major VARCHAR(60)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    EXEC dbo.GetStudentsByMajor @MajorName = @Major;
+END;
+GO
+EXEC dbo.RunMajorReport @Major = 'Business';</pre><p>Returns David. The parameter name of the parent need not match the child's parameter name.</p></details>
+<details><summary>Solution 9 — AddPracticeStudent</summary><pre>CREATE OR ALTER PROCEDURE dbo.AddPracticeStudent
+    @ID INT, @Name VARCHAR(60), @Age INT,
+    @Major VARCHAR(60), @GPA DECIMAL(3,2)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    INSERT INTO dbo.Students
+        (StudentID, StudentName, Age, Major, GPA)
+    VALUES (@ID, @Name, @Age, @Major, @GPA);
+END;
+GO
+EXEC dbo.AddPracticeStudent
+    @ID = 108, @Name = 'Ivy', @Age = 20,
+    @Major = 'Business', @GPA = 3.50;
+SELECT * FROM dbo.Students WHERE StudentID = 108;</pre><p>Verify Ivy exists. Do not run the same insert twice without removing the row first.</p></details>
+<details><summary>Solution 10 — UpdatePracticeGPA</summary><pre>CREATE OR ALTER PROCEDURE dbo.UpdatePracticeGPA
+    @ID INT, @NewGPA DECIMAL(3,2)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE dbo.Students SET GPA = @NewGPA
+    WHERE StudentID = @ID;
+END;
+GO
+EXEC dbo.UpdatePracticeGPA @ID = 108, @NewGPA = 3.90;
+SELECT * FROM dbo.Students WHERE StudentID = 108;</pre><p>Verify Ivy's GPA is now 3.90.</p></details>
+<details><summary>Solution 11 — DeletePracticeStudent</summary><pre>CREATE OR ALTER PROCEDURE dbo.DeletePracticeStudent
+    @ID INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM dbo.Students WHERE StudentID = @ID;
+END;
+GO
+EXEC dbo.DeletePracticeStudent @ID = 108;
+SELECT * FROM dbo.Students WHERE StudentID = 108;</pre><p>Zero rows confirms Ivy was deleted.</p></details>
+<details><summary>Solution 12 — Explain nesting and OUTPUT</summary><p><strong>Nesting:</strong> A report procedure can call a reusable filtering procedure instead of repeating the same SQL. The outer procedure may supply input parameters to the inner procedure and continue after the inner call finishes.</p><p><strong>OUTPUT versus SELECT:</strong> An OUTPUT parameter assigns a value to a variable in the caller; SELECT sends a result set back to the client. A procedure may do both.</p></details></section>
+<section><h2>11. Troubleshooting and review</h2><table><tr><th>Problem</th><th>What to check</th></tr><tr><td>“CREATE/ALTER PROCEDURE must be the first statement in a query batch”</td><td>Put <code>GO</code> before the procedure definition; run its definition as a separate batch.</td></tr><tr><td>“Could not find stored procedure”</td><td>Confirm <code>USE StoredProcLab;</code>, the schema (<code>dbo</code>), and that the creation batch succeeded.</td></tr><tr><td>“Procedure expects parameter ...”</td><td>Supply all required parameters, or define defaults where appropriate.</td></tr><tr><td>“Must declare the scalar variable”</td><td>Declare the caller variable and execute it within the same batch; <code>GO</code> ends variable scope.</td></tr><tr><td>Duplicate primary key error</td><td>Use a new student ID or remove the previously inserted practice row.</td></tr><tr><td>OUTPUT variable remains NULL</td><td>Check the child assigns it, the call includes <code>OUTPUT</code>, and the query actually has matching data.</td></tr></table><div class="note"><strong>Final recap:</strong> No-parameter procedures perform a fixed operation; input parameters customize the operation; OUTPUT parameters return values to the caller; nested procedures reuse other procedures; CRUD procedures modify data; transactions protect related changes.</div></section>
+</main>
+<script>const qs=[{q:'Which command runs a stored procedure?',a:['CREATE TABLE','EXEC','DROP TABLE','DECLARE'],c:1,e:'EXEC invokes an existing stored procedure. CREATE defines it; DECLARE creates variables.'},{q:'A procedure has no parameters. Which call is appropriate?',a:['EXEC dbo.GetAllStudents;','EXEC @GetAllStudents;','SELECT PROCEDURE GetAllStudents;','CREATE dbo.GetAllStudents;'],c:0,e:'EXEC dbo.GetAllStudents runs the saved procedure without arguments.'},{q:'What does @StudentID INT represent in a procedure definition?',a:['A table name','A column constraint','An integer parameter','A stored index'],c:2,e:'@StudentID is a parameter whose type is INT.'},{q:'What is the purpose of a default parameter value?',a:['To delete a procedure','To allow omission of that argument','To force every call to provide it','To create a primary key'],c:1,e:'A default lets the caller omit the parameter, using the specified default value.'},{q:'How does a caller receive an OUTPUT parameter value?',a:['Only through PRINT','By passing a variable with OUTPUT','By adding GROUP BY','By creating a view'],c:1,e:'The caller declares a variable and passes it with the OUTPUT keyword.'},{q:'Which statement correctly describes nested procedures?',a:['They cannot accept parameters','They must be in different databases','One procedure executes another with EXEC','They run only from triggers'],c:2,e:'A parent procedure can call another procedure using EXEC, optionally passing arguments.'},{q:'Which statement changes existing rows?',a:['UPDATE','INSERT','SELECT','CREATE'],c:0,e:'UPDATE modifies existing rows; INSERT creates rows; SELECT reads rows.'},{q:'Why should an UPDATE procedure usually include WHERE?',a:['To change every row','To limit which rows are changed','To declare an OUTPUT parameter','To create a transaction'],c:1,e:'WHERE restricts the rows that meet the update condition.'},{q:'What does BEGIN TRANSACTION ... COMMIT do?',a:['Permanently deletes the procedure','Groups changes into a transaction that can be committed','Creates a new schema','Returns an output parameter'],c:1,e:'COMMIT makes the transaction’s changes permanent; ROLLBACK can undo uncommitted changes.'},{q:'Which statement about SELECT and OUTPUT is accurate?',a:['They always return identical structures','OUTPUT returns a value through a caller variable; SELECT can return a result set','SELECT cannot be used in procedures','OUTPUT is required in every procedure'],c:1,e:'OUTPUT communicates through a variable; SELECT communicates tabular results to the client.'}];const host=document.getElementById('quizitems');qs.forEach((q,i)=>{const box=document.createElement('div');box.className='quizitem';const h=document.createElement('strong');h.textContent=(i+1)+'. '+q.q;box.appendChild(h);q.a.forEach((a,j)=>{const l=document.createElement('label');const r=document.createElement('input');r.type='radio';r.name='q'+i;r.value=String(j);l.append(r,document.createTextNode(' '+String.fromCharCode(65+j)+'. '+a));box.appendChild(l)});const f=document.createElement('div');f.className='feedback';f.id='f'+i;f.setAttribute('aria-live','polite');box.appendChild(f);host.appendChild(box)});document.getElementById('checkQuiz').onclick=()=>{let score=0;qs.forEach((q,i)=>{const chosen=document.querySelector('input[name="q'+i+'"]:checked');const f=document.getElementById('f'+i);if(!chosen){f.textContent='Not answered. '+q.e;f.className='feedback bad'}else if(Number(chosen.value)===q.c){score++;f.textContent='Correct. '+q.e;f.className='feedback good'}else{f.textContent='Try again. '+q.e;f.className='feedback bad'}});document.getElementById('quizscore').textContent='Score: '+score+' / '+qs.length};document.getElementById('resetQuiz').onclick=()=>{document.querySelectorAll('#quizitems input').forEach(x=>x.checked=false);document.querySelectorAll('.feedback').forEach(x=>x.textContent='');document.getElementById('quizscore').textContent=''};document.querySelectorAll('pre').forEach(pre=>{const wrap=document.createElement('div');wrap.className='codehead';const s=document.createElement('strong');s.textContent='SQL';const b=document.createElement('button');b.type='button';b.textContent='Copy SQL';b.onclick=async()=>{try{await navigator.clipboard.writeText(pre.innerText);b.textContent='Copied!';setTimeout(()=>b.textContent='Copy SQL',1400)}catch(e){b.textContent='Select and copy manually'}};wrap.append(s,b);pre.parentNode.insertBefore(wrap,pre)});</script></body></html>
