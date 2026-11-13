@@ -1,0 +1,112 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Triggers Part A Assignment — Answer Key (Instructor Only)</title><style>body{font:16px/1.65 system-ui,Arial;max-width:950px;margin:35px auto;padding:0 22px;color:#202b39}h1,h2,h3{color:#173b62}h1{border-bottom:3px solid #327bb3;padding-bottom:12px}section{margin:25px 0}pre{background:#f1f5f9;padding:17px;overflow:auto;border-left:4px solid #327bb3;white-space:pre}code{font-family:Consolas,monospace}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bac8d6;padding:9px;text-align:left}th{background:#e9f1f8}.note{background:#eef7ff;padding:14px;border-radius:8px}.exercise{border:1px solid #cad5e0;border-radius:8px;padding:14px;margin:14px 0}details{padding:10px;background:#f3f6fa;margin:10px 0}footer{margin-top:45px;color:#667}</style></head><body><h1>Triggers Part A Assignment — Answer Key</h1><p class="note"><strong>Instructor only — do not publish to students.</strong> Solutions, expected results, and grading notes for every task. Expected results assume the tasks were run in order on a fresh setup. AuditID values may have gaps, because rolled-back inserts still use identity numbers, so compare rows by content, not by AuditID.</p>
+
+<h2>Part A — Concept questions</h2><div class="exercise"><strong>A1.</strong> An AFTER trigger runs automatically when its event (INSERT, UPDATE, or DELETE) happens on its table. A stored procedure runs only when it is called explicitly with <code>EXEC</code>.<br><strong>A2.</strong> <code>inserted</code> holds the new (after) version of each updated row; <code>deleted</code> holds the old (before) version.<br><strong>A3.</strong> The trigger fires <strong>once</strong>, and <code>deleted</code> contains <strong>4 rows</strong>. The trigger must use set-based code (e.g., <code>INSERT … SELECT … FROM deleted</code>) so that all 4 rows are handled, not just one.<br><strong>A4.</strong> A DDL trigger fires when the database structure changes (CREATE, ALTER, DROP) and is attached to a database or the server. A LOGON trigger fires when a user connects to SQL Server, after the login is accepted, and can refuse the connection.<br><strong>A5.</strong> A <code>CHECK (Copies &gt;= 1)</code> constraint. Rules that need a trigger include anything that compares old and new values (Task 6), keeps history (Tasks 1–3), or writes to another table (Tasks 5, 7).<br><em>Grading:</em> 0.5 point each; 0.25 for a partly correct answer.</div>
+
+<h2>Part B — Tasks 1–3</h2>
+<div class="exercise"><strong>Task 1</strong><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Books_AfterInsert
+ON dbo.Books AFTER INSERT AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.BookAudit(BookID,ActionType,OldCopies,NewCopies)
+ SELECT BookID,'INSERT',NULL,Copies FROM inserted;
+END;
+GO</code></pre><p>Expected: 3 rows — INSERT for books 1, 2, 3 with NewCopies 3, 5, 4 and OldCopies NULL.</p></div>
+
+<div class="exercise"><strong>Task 2</strong><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Books_AfterUpdate
+ON dbo.Books AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.BookAudit(BookID,ActionType,OldCopies,NewCopies)
+ SELECT i.BookID,'UPDATE',d.Copies,i.Copies
+ FROM inserted AS i JOIN deleted AS d ON i.BookID = d.BookID
+ WHERE i.Copies &lt;&gt; d.Copies;
+END;
+GO</code></pre><p>Expected: 2 new rows — UPDATE book 1 (3 → 5) and book 2 (5 → 7). The Author update adds <strong>no</strong> row. <em>Common error:</em> no <code>WHERE</code> filter, which produces an extra row for book 2 with 7 → 7.</p></div>
+
+<div class="exercise"><strong>Task 3</strong><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Books_AfterDelete
+ON dbo.Books AFTER DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.BookAudit(BookID,ActionType,OldCopies,NewCopies)
+ SELECT BookID,'DELETE',Copies,NULL FROM deleted;
+END;
+GO</code></pre><p>Expected: 2 new rows — INSERT book 4 (NULL → 1), produced by the Task 1 trigger, and DELETE book 4 (1 → NULL).</p></div>
+<p><em>Grading for Tasks 1–3 (2 each):</em> correct output 1, set-based logic 0.5, <code>SET NOCOUNT ON</code> and correct columns/ActionType 0.5. Using variables (single-row logic): maximum 1.</p>
+
+<h2>Part C — Tasks 4–8</h2>
+<div class="exercise"><strong>Task 4</strong><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Books_MinCopies
+ON dbo.Books AFTER INSERT AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1 FROM inserted WHERE Copies &lt; 1)
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50001, N'A new book must have at least 1 copy.', 1;
+ END
+END;
+GO</code></pre><p>Expected: <code>Msg 50001</code> for “Empty Book” (SSMS may also show Msg 3609, which is fine). Books then holds 1, 2, 3, 5. Audit: only one new row, INSERT book 5 (NULL → 2). The audit row for the failed insert was rolled back.</p></div>
+
+<div class="exercise"><strong>Task 5</strong><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Books_TitleChange
+ON dbo.Books AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.LibraryLog(Message)
+ SELECT N'Title changed from ' + d.Title + N' to ' + i.Title
+ FROM inserted AS i JOIN deleted AS d ON i.BookID = d.BookID
+ WHERE i.Title &lt;&gt; d.Title;
+END;
+GO</code></pre><p>Expected: exactly one message — “Title changed from Database Systems to Fundamentals of Database Systems”. Using <code>CONCAT</code> instead is equally correct. No BookAudit rows, because Copies did not change.</p></div>
+
+<div class="exercise"><strong>Task 6</strong><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Books_LimitReduction
+ON dbo.Books AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1
+            FROM inserted AS i JOIN deleted AS d ON i.BookID = d.BookID
+            WHERE d.Copies - i.Copies &gt; 5)
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50002, N'Copies cannot be reduced by more than 5 at once.', 1;
+ END
+END;
+GO</code></pre><p>Expected: <code>Msg 50002</code> for the −6 update (7 → 1). The −2 update succeeds, and book 2 ends with <strong>5</strong> copies. Audit: one new row, UPDATE book 2 (7 → 5). <em>Common error:</em> checking <code>i.Copies &lt; 5</code> or using only <code>inserted</code>, which cannot see the size of the reduction.</p></div>
+
+<div class="exercise"><strong>Task 7</strong><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Books_Archive
+ON dbo.Books AFTER DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.BookArchive(BookID,Title,Author,Copies)
+ SELECT BookID,Title,Author,Copies FROM deleted;
+END;
+GO</code></pre><p>Expected: BookArchive holds book 5, Learning SQL, Beaulieu, 2. Audit: one new row, DELETE book 5 (2 → NULL).</p></div>
+
+<div class="exercise"><strong>Task 8</strong><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Books_BlockActiveDelete
+ON dbo.Books AFTER DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1 FROM deleted WHERE IsActive = 1)
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50003, N'Active books cannot be deleted. Deactivate them first.', 1;
+ END
+END;
+GO</code></pre><p>Expected: <code>Msg 50003</code> on the first delete. After deactivation the delete succeeds. Books then holds only 1 and 2. Audit: one new row, DELETE book 3 (4 → NULL). The deactivation adds no audit row, because Copies did not change.</p></div>
+<p><em>Grading for Tasks 4–8 (1.5 each):</em> correct logic and test results 1, correct pseudo-table (and join where needed) 0.25, trigger dropped 0.25. Wrong error number or message: −0.25.</p>
+
+<h2>Part D — Tasks 9–10</h2>
+<div class="exercise"><strong>Task 9 (a) — Problems (any three; 1 point):</strong><ol><li><strong>Single-row logic:</strong> <code>@title</code> holds one title, so a 2-row insert logs only one message.</li><li><strong>Zero-row failure:</strong> if an INSERT…SELECT inserts no rows, <code>@title</code> is NULL, so the message is NULL. Inserting it into the NOT NULL <code>Message</code> column raises an error that cancels the user's statement.</li><li><strong>No <code>SET NOCOUNT ON</code>.</strong></li><li>The row the variable picks is not predictable when there are several rows.</li></ol><strong>(b) Corrected trigger (0.5 point):</strong><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Books_NewBookLog
+ON dbo.Books AFTER INSERT AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.LibraryLog(Message)
+ SELECT N'New book: ' + Title FROM inserted;
+END;
+GO</code></pre><p><strong>(c) Expected (0.5 point):</strong> two new messages, “New book: Head First SQL” and “New book: SQL Cookbook”. Audit: INSERT book 6 (NULL → 2) and INSERT book 7 (NULL → 3).</p></div>
+
+<div class="exercise"><strong>Task 10 — Expected prediction: 6 rows.</strong> <em>(Prediction and explanation 1 point, verification 1 point.)</em><table><tr><th>Statement</th><th>Rows added</th><th>Reason</th></tr><tr><td>INSERT 2 books</td><td>2 × INSERT</td><td>10 (NULL → 2), 11 (NULL → 3)</td></tr><tr><td>Copies + 1 for both</td><td>2 × UPDATE</td><td>10 (2 → 3), 11 (3 → 4)</td></tr><tr><td><code>Copies = Copies</code></td><td>0</td><td>The trigger fires, but the <code>WHERE i.Copies &lt;&gt; d.Copies</code> filter removes the row</td></tr><tr><td>DELETE both</td><td>2 × DELETE</td><td>10 (3 → NULL), 11 (4 → NULL)</td></tr></table><p><em>Note:</em> a student whose Task 2 trigger lacks the change filter will see 7 rows. Award the verification points if they explain the difference.</p></div>
+
+<h2>Expected final state (for quick grading)</h2><h3>BookAudit — 19 rows, in this order (rows within one statement may appear in either order)</h3><table><tr><th>#</th><th>From</th><th>BookID</th><th>ActionType</th><th>OldCopies</th><th>NewCopies</th></tr><tr><td>1–3</td><td>Task 1</td><td>1, 2, 3</td><td>INSERT</td><td>NULL</td><td>3, 5, 4</td></tr><tr><td>4–5</td><td>Task 2</td><td>1, 2</td><td>UPDATE</td><td>3, 5</td><td>5, 7</td></tr><tr><td>6</td><td>Task 3</td><td>4</td><td>INSERT</td><td>NULL</td><td>1</td></tr><tr><td>7</td><td>Task 3</td><td>4</td><td>DELETE</td><td>1</td><td>NULL</td></tr><tr><td>8</td><td>Task 4</td><td>5</td><td>INSERT</td><td>NULL</td><td>2</td></tr><tr><td>9</td><td>Task 6</td><td>2</td><td>UPDATE</td><td>7</td><td>5</td></tr><tr><td>10</td><td>Task 7</td><td>5</td><td>DELETE</td><td>2</td><td>NULL</td></tr><tr><td>11</td><td>Task 8</td><td>3</td><td>DELETE</td><td>4</td><td>NULL</td></tr><tr><td>12–13</td><td>Task 9</td><td>6, 7</td><td>INSERT</td><td>NULL</td><td>2, 3</td></tr><tr><td>14–15</td><td>Task 10</td><td>10, 11</td><td>INSERT</td><td>NULL</td><td>2, 3</td></tr><tr><td>16–17</td><td>Task 10</td><td>10, 11</td><td>UPDATE</td><td>2, 3</td><td>3, 4</td></tr><tr><td>18–19</td><td>Task 10</td><td>10, 11</td><td>DELETE</td><td>3, 4</td><td>NULL</td></tr></table>
+<h3>Books</h3><table><tr><th>BookID</th><th>Title</th><th>Author</th><th>Copies</th><th>IsActive</th></tr><tr><td>1</td><td>Fundamentals of Database Systems</td><td>Elmasri</td><td>5</td><td>1</td></tr><tr><td>2</td><td>Clean Code</td><td>R. Martin</td><td>5</td><td>1</td></tr><tr><td>6</td><td>Head First SQL</td><td>Beighley</td><td>2</td><td>1</td></tr><tr><td>7</td><td>SQL Cookbook</td><td>Molinaro</td><td>3</td><td>1</td></tr></table>
+<h3>LibraryLog (3 rows)</h3><p>Title changed from Database Systems to Fundamentals of Database Systems · New book: Head First SQL · New book: SQL Cookbook</p>
+<h3>BookArchive (1 row)</h3><p>5 · Learning SQL · Beaulieu · 2</p>
+<h3>Final trigger check</h3><p>Exactly three triggers on Books: <code>trg_Books_AfterInsert</code>, <code>trg_Books_AfterUpdate</code>, <code>trg_Books_AfterDelete</code>. Any extra trigger means a task's DROP was skipped: −0.25 per task.</p></body></html>
