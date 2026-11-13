@@ -1,0 +1,391 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SQL Server Triggers — Part A: AFTER Triggers</title><style>body{font:16px/1.65 system-ui,Arial;max-width:950px;margin:35px auto;padding:0 22px;color:#202b39}h1,h2,h3{color:#173b62}h1{border-bottom:3px solid #327bb3;padding-bottom:12px}section{margin:25px 0}pre{background:#f1f5f9;padding:17px;overflow:auto;border-left:4px solid #327bb3;white-space:pre}code{font-family:Consolas,monospace}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bac8d6;padding:9px;text-align:left}th{background:#e9f1f8}.note{background:#eef7ff;padding:14px;border-radius:8px}.exercise{border:1px solid #cad5e0;border-radius:8px;padding:14px;margin:14px 0}details{padding:10px;background:#f3f6fa;margin:10px 0}footer{margin-top:45px;color:#667}</style></head><body><h1>SQL Server Triggers — Part A: AFTER Triggers</h1><p class="note"><strong>Learning goals:</strong> Explain triggers, distinguish DML/DDL/LOGON triggers, create AFTER INSERT/UPDATE/DELETE triggers, and interpret the <code>inserted</code> and <code>deleted</code> pseudo-tables. You will also enforce business rules with <code>ROLLBACK</code>, write multi-row-safe triggers, use <code>UPDATE()</code>, and manage (view, disable, drop) triggers.</p>
+<h2>1. What is a trigger?</h2><p>A trigger is a stored database program automatically invoked by a specified event. Unlike a stored procedure, you do not normally call a DML trigger explicitly. Triggers can support auditing and enforcing business rules, but they also add hidden work to data changes.</p>
+<h2>2. SQL Server trigger categories</h2><table><tr><th>Category</th><th>Typical events</th><th>In this course?</th></tr><tr><td>DML</td><td>INSERT, UPDATE, DELETE</td><td>Yes</td></tr><tr><td>DDL</td><td>CREATE, ALTER, DROP</td><td>No</td></tr><tr><td>LOGON</td><td>Session logon event</td><td>No</td></tr></table><p>DML triggers can be <strong>AFTER</strong> or <strong>INSTEAD OF</strong>. This week covers AFTER; next week covers INSTEAD OF.</p>
+<h3>2.1 DDL triggers (overview only)</h3><p>A <strong>DDL trigger</strong> fires when the <em>structure</em> of the database changes — for example when someone runs <code>CREATE TABLE</code>, <code>ALTER TABLE</code>, or <code>DROP TABLE</code>. It is attached to the whole database (or server), not to a single table. Organizations use DDL triggers to record schema changes or to stop someone from accidentally dropping important tables.</p>
+<h3>2.2 LOGON triggers (overview only)</h3><p>A <strong>LOGON trigger</strong> fires when a user connects to SQL Server, after the login and password are accepted but before the session starts. It can refuse the connection — for example, to limit how many sessions one login may open, or to block logins outside working hours. Administrators use them for security and auditing.</p><table><tr><th>Trigger type</th><th>Fires when…</th><th>Attached to</th></tr><tr><td>DML</td><td>Data changes (INSERT, UPDATE, DELETE)</td><td>A table</td></tr><tr><td>DDL</td><td>Structure changes (CREATE, ALTER, DROP)</td><td>A database or the server</td></tr><tr><td>LOGON</td><td>A user connects</td><td>The server</td></tr></table><p class="note">DDL and LOGON triggers are not practiced in this course. The rest of this tutorial focuses on DML AFTER triggers.</p>
+<h2>3. AFTER triggers</h2><p>An AFTER trigger executes after the triggering statement has performed its data changes and passed applicable constraint checks, but before its transaction commits. An error can roll back the transaction. SQL Server DML triggers fire <strong>once per statement</strong>, not once per row.</p>
+<h3>3.1 Syntax</h3><pre><code>CREATE OR ALTER TRIGGER schema.trigger_name
+ON schema.table_name
+AFTER { INSERT | UPDATE | DELETE } [ , ...n ]   -- FOR is a synonym for AFTER
+AS
+BEGIN
+ SET NOCOUNT ON;          -- stop extra "(n rows affected)" messages
+ -- set-based logic that reads inserted and/or deleted
+END;
+GO</code></pre><p>One trigger can respond to several events, for example <code>AFTER INSERT, UPDATE</code>. <code>CREATE OR ALTER</code> (SQL Server 2016 SP1 and later) creates the trigger, or replaces it if it already exists.</p>
+<h3>3.2 What happens, step by step</h3><ol><li>The application runs an <code>INSERT</code>, <code>UPDATE</code>, or <code>DELETE</code> statement.</li><li>SQL Server checks constraints (<code>PRIMARY KEY</code>, <code>UNIQUE</code>, <code>FOREIGN KEY</code>, <code>CHECK</code>, <code>NOT NULL</code>). <strong>If a constraint fails, the statement fails and the AFTER trigger never runs.</strong></li><li>The rows are changed in the table, and the affected rows are copied into <code>inserted</code> and/or <code>deleted</code>.</li><li>Every AFTER trigger defined for that event runs (once each).</li><li>If any trigger raises an error or runs <code>ROLLBACK TRANSACTION</code>, the statement <em>and</em> everything else in the transaction is undone. Otherwise the transaction commits (in autocommit mode) or stays open until your <code>COMMIT</code>.</li></ol>
+<h3>3.3 Key facts to remember</h3><table><tr><th>Fact</th><th>Why it matters</th></tr><tr><td><code>FOR</code> = <code>AFTER</code></td><td>Older scripts use <code>FOR INSERT</code>; it behaves exactly like <code>AFTER INSERT</code>.</td></tr><tr><td>AFTER triggers are allowed on <strong>tables only</strong></td><td>Views can only have INSTEAD OF triggers (next week).</td></tr><tr><td>A table can have <strong>many</strong> AFTER triggers for the same event</td><td>Each one runs; do not rely on the order in which they run.</td></tr><tr><td>The trigger fires even when <strong>0 rows</strong> are affected</td><td>Always write logic that works when <code>inserted</code>/<code>deleted</code> are empty.</td></tr><tr><td><code>TRUNCATE TABLE</code> does <strong>not</strong> fire DELETE triggers</td><td>An audit trigger will not capture a truncate.</td></tr><tr><td><code>BULK INSERT</code>/bcp skip triggers unless <code>FIRE_TRIGGERS</code> is specified</td><td>Bulk loads can bypass your rules.</td></tr><tr><td>The trigger runs <strong>inside</strong> the caller's transaction</td><td>A slow trigger makes every INSERT/UPDATE/DELETE slower and holds locks longer.</td></tr><tr><td>Returning result sets (plain <code>SELECT</code>) from a trigger is deprecated</td><td>Write to a table instead of selecting to the client.</td></tr></table>
+<h3>3.4 Useful functions inside an AFTER trigger</h3><table><tr><th>Function</th><th>Returns</th></tr><tr><td><code>UPDATE(ColumnName)</code></td><td>In an UPDATE trigger: TRUE if the column appears in the SET list (even if the value did not actually change). In an INSERT trigger it is TRUE for every column, because every column receives a value (explicit, default, or NULL).</td></tr><tr><td><code>COLUMNS_UPDATED()</code></td><td>A bit pattern showing which columns were in the statement (advanced).</td></tr><tr><td><code>@@ROWCOUNT</code></td><td>Rows affected by the triggering statement — but only if read as the <em>very first</em> statement (even <code>SET NOCOUNT ON</code> resets it). Prefer <code>EXISTS (SELECT 1 FROM inserted)</code>.</td></tr><tr><td><code>SUSER_SNAME()</code>, <code>ORIGINAL_LOGIN()</code></td><td>The login making the change — useful in audit tables.</td></tr><tr><td><code>APP_NAME()</code>, <code>HOST_NAME()</code></td><td>The application and computer name of the session.</td></tr></table>
+<h3>3.5 Trigger or constraint?</h3><p>Use the simplest tool that works. A rule about <em>one row of one table</em> (e.g., Credits ≥ 0) belongs in a <code>CHECK</code> constraint — it is faster, visible, and cannot be disabled by accident as easily. Use an AFTER trigger when you need to <strong>record history</strong>, <strong>compare old and new values</strong>, <strong>change another table</strong>, or enforce a rule that <strong>spans tables or rows</strong>.</p>
+<h2>4. Magic tables (logical pseudo-tables)</h2><p>Inside a DML trigger, <code>inserted</code> and <code>deleted</code> expose sets of affected rows. They are not permanent tables.</p><table><tr><th>Event</th><th>inserted</th><th>deleted</th></tr><tr><td>INSERT</td><td>New rows</td><td>Empty</td></tr><tr><td>UPDATE</td><td>New versions</td><td>Old versions</td></tr><tr><td>DELETE</td><td>Empty</td><td>Old/deleted rows</td></tr></table><ul><li>Both have the <strong>same columns</strong> as the trigger's table.</li><li>They are <strong>read-only</strong>: you can SELECT and JOIN them, but not INSERT, UPDATE, or DELETE them.</li><li>They exist <strong>only while the trigger runs</strong> and are visible only inside that trigger.</li><li>For an UPDATE, match old and new rows by joining on the primary key: <code>inserted i JOIN deleted d ON i.PK = d.PK</code>.</li><li>You can tell which event fired a multi-event trigger: rows in both = UPDATE; only <code>inserted</code> = INSERT; only <code>deleted</code> = DELETE; neither = zero rows affected.</li></ul>
+<h2>5. Lab setup</h2><p>Run the following in a practice database in SSMS. <strong>Warning:</strong> the setup drops existing tables with these names. The first lines also remove objects created later in this tutorial, so you can re-run the setup at any time to start fresh.</p><pre><code>-- Remove tables from later sections (safe to run the first time, too)
+DROP TABLE IF EXISTS dbo.ActivityLog, dbo.StudentArchive;
+GO
+IF OBJECT_ID(&#x27;dbo.StudentAudit&#x27;,&#x27;U&#x27;) IS NOT NULL DROP TABLE dbo.StudentAudit;
+IF OBJECT_ID(&#x27;dbo.Students&#x27;,&#x27;U&#x27;) IS NOT NULL DROP TABLE dbo.Students;
+GO
+CREATE TABLE dbo.Students (
+ StudentID INT PRIMARY KEY, StudentName NVARCHAR(80) NOT NULL,
+ Credits INT NOT NULL, IsActive BIT NOT NULL DEFAULT 1
+);
+CREATE TABLE dbo.StudentAudit (
+ AuditID INT IDENTITY(1,1) PRIMARY KEY,
+ StudentID INT NOT NULL, ActionType VARCHAR(10) NOT NULL,
+ OldCredits INT NULL, NewCredits INT NULL,
+ ChangedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+);
+GO</code></pre><h2>6. AFTER INSERT: record new students</h2><p>Flow: INSERT statement → new row in Students → AFTER trigger reads <code>inserted</code> → audit record.</p><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_AfterInsert
+ON dbo.Students AFTER INSERT AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.StudentAudit(StudentID,ActionType,OldCredits,NewCredits)
+ SELECT StudentID,&#x27;INSERT&#x27;,NULL,Credits FROM inserted;
+END;
+GO</code></pre><pre><code>INSERT INTO dbo.Students(StudentID,StudentName,Credits)
+VALUES (1,N&#x27;Ana&#x27;,20),(2,N&#x27;Ben&#x27;,35);
+SELECT * FROM dbo.Students;
+SELECT StudentID,ActionType,OldCredits,NewCredits FROM dbo.StudentAudit ORDER BY AuditID;</code></pre><p>Expected: two Students rows and two INSERT audit rows; OldCredits is NULL and NewCredits is 20 or 35.</p><h2>7. AFTER UPDATE: compare old and new values</h2><p>Flow: UPDATE → <code>deleted</code> has previous Credits → <code>inserted</code> has new Credits → trigger logs changed values.</p><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_AfterUpdate
+ON dbo.Students AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.StudentAudit(StudentID,ActionType,OldCredits,NewCredits)
+ SELECT i.StudentID,&#x27;UPDATE&#x27;,d.Credits,i.Credits
+ FROM inserted AS i JOIN deleted AS d ON i.StudentID=d.StudentID
+ WHERE i.Credits&lt;&gt;d.Credits;
+END;
+GO</code></pre><pre><code>UPDATE dbo.Students SET Credits=Credits+5 WHERE StudentID=1;
+SELECT StudentID,ActionType,OldCredits,NewCredits FROM dbo.StudentAudit ORDER BY AuditID;</code></pre><p>Expected: an UPDATE audit entry for student 1, OldCredits 20, NewCredits 25. The join handles multiple updated students, too.</p><h2>8. AFTER DELETE: retain deleted values in the audit</h2><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_AfterDelete
+ON dbo.Students AFTER DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.StudentAudit(StudentID,ActionType,OldCredits,NewCredits)
+ SELECT StudentID,&#x27;DELETE&#x27;,Credits,NULL FROM deleted;
+END;
+GO</code></pre><pre><code>DELETE FROM dbo.Students WHERE StudentID=2;
+SELECT * FROM dbo.Students;
+SELECT StudentID,ActionType,OldCredits,NewCredits FROM dbo.StudentAudit ORDER BY AuditID;</code></pre><p>Expected: student 2 is absent from Students; a DELETE audit entry shows OldCredits 35 and NewCredits NULL.</p><h2>9. Multi-row thinking: the #1 trigger mistake</h2><p>Because a trigger fires once per statement, <code>inserted</code> and <code>deleted</code> may hold 0, 1, or many rows. Code that copies a value into a variable silently handles only <em>one</em> of them.</p><pre><code>-- DON'T DO THIS (shown for discussion only — do not create it)
+CREATE OR ALTER TRIGGER dbo.trg_Bad_Insert
+ON dbo.Students AFTER INSERT AS
+BEGIN
+ DECLARE @id INT, @credits INT;
+ SELECT @id = StudentID, @credits = Credits FROM inserted;   -- keeps only ONE row
+ INSERT INTO dbo.StudentAudit(StudentID,ActionType,OldCredits,NewCredits)
+ VALUES (@id,'INSERT',NULL,@credits);
+END;</code></pre><table><tr><th>Statement</th><th>Bad trigger result</th><th>Set-based trigger (Section 6) result</th></tr><tr><td>INSERT 1 row</td><td>1 audit row ✔</td><td>1 audit row ✔</td></tr><tr><td>INSERT 3 rows</td><td>1 audit row ✘ (2 lost)</td><td>3 audit rows ✔</td></tr></table><p><strong>Rule:</strong> write trigger logic as <code>INSERT … SELECT … FROM inserted/deleted</code> or <code>IF EXISTS (…)</code>. Avoid variables that hold one row's value.</p>
+
+<h2>10. Setup for the extra examples</h2><p>The examples below write simple messages to an activity log and copy deleted rows to an archive. Run this once, after Section 8.</p><pre><code>CREATE TABLE dbo.ActivityLog (
+ LogID INT IDENTITY(1,1) PRIMARY KEY,
+ Message NVARCHAR(200) NOT NULL,
+ LoggedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+);
+CREATE TABLE dbo.StudentArchive (
+ StudentID INT NOT NULL, StudentName NVARCHAR(80) NOT NULL,
+ Credits INT NOT NULL, DeletedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+);
+GO</code></pre><p class="note"><strong>How to use these examples:</strong> each example creates one trigger, tests it, and then drops it, so the examples do not affect each other. Run them in order. When a test is <em>expected to fail</em>, it is followed by <code>GO</code>, because an error raised in a trigger stops the rest of the batch.</p>
+
+<h2>11. More AFTER INSERT examples</h2>
+<h3>Example 11.1 — Log a message for each new student</h3><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_InsertMessage
+ON dbo.Students AFTER INSERT AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.ActivityLog(Message)
+ SELECT N'New student added: ' + StudentName FROM inserted;
+END;
+GO
+INSERT INTO dbo.Students(StudentID,StudentName,Credits)
+VALUES (3,N'Chen',40),(4,N'Dia',10);
+SELECT Message FROM dbo.ActivityLog ORDER BY LogID;
+DROP TRIGGER dbo.trg_Students_InsertMessage;</code></pre><p>Expected: two messages — “New student added: Chen” and “New student added: Dia”. One INSERT statement, one trigger run, two rows handled.</p>
+
+<h3>Example 11.2 — Reject a new student with too many credits</h3><p>If the trigger finds bad data, <code>ROLLBACK TRANSACTION</code> cancels the INSERT and <code>THROW</code> sends an error message to the user.</p><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_InsertCreditLimit
+ON dbo.Students AFTER INSERT AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1 FROM inserted WHERE Credits &gt; 200)
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50001, N'A new student cannot have more than 200 credits.', 1;
+ END
+END;
+GO
+INSERT INTO dbo.Students(StudentID,StudentName,Credits) VALUES (5,N'Eli',250);  -- fails
+GO
+SELECT * FROM dbo.Students WHERE StudentID = 5;   -- no rows
+DROP TRIGGER dbo.trg_Students_InsertCreditLimit;</code></pre><p>Expected: <code>Msg 50001</code>, and Eli is not in the table. The INSERT audit row from Section 6 is also undone — a rollback cancels everything in the transaction. (For a simple one-column rule like this, a <code>CHECK</code> constraint is usually the better tool; the trigger version shows the ROLLBACK pattern.)</p>
+
+<h2>12. More AFTER UPDATE examples</h2>
+<h3>Example 12.1 — Log name changes</h3><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_NameChange
+ON dbo.Students AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.ActivityLog(Message)
+ SELECT N'Name changed from ' + d.StudentName + N' to ' + i.StudentName
+ FROM inserted AS i JOIN deleted AS d ON i.StudentID = d.StudentID
+ WHERE i.StudentName &lt;&gt; d.StudentName;
+END;
+GO
+UPDATE dbo.Students SET StudentName = N'Ana Lopez' WHERE StudentID = 1;
+SELECT Message FROM dbo.ActivityLog ORDER BY LogID;
+DROP TRIGGER dbo.trg_Students_NameChange;</code></pre><p>Expected: a new message “Name changed from Ana to Ana Lopez”. <code>deleted</code> supplied the old name, <code>inserted</code> the new one.</p>
+
+<h3>Example 12.2 — Do not allow Credits to go down</h3><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_NoCreditDecrease
+ON dbo.Students AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1
+            FROM inserted AS i JOIN deleted AS d ON i.StudentID = d.StudentID
+            WHERE i.Credits &lt; d.Credits)
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50002, N'Credits cannot be decreased.', 1;
+ END
+END;
+GO
+UPDATE dbo.Students SET Credits = Credits - 5 WHERE StudentID = 1;  -- fails
+GO
+SELECT StudentID, Credits FROM dbo.Students WHERE StudentID = 1;  -- still 25
+DROP TRIGGER dbo.trg_Students_NoCreditDecrease;</code></pre><p>Expected: <code>Msg 50002</code>; Ana still has 25 credits. This rule compares old and new values, which a CHECK constraint cannot do — a good reason to use a trigger.</p>
+
+<h3>Example 12.3 — Log when a student is deactivated</h3><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_Deactivated
+ON dbo.Students AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.ActivityLog(Message)
+ SELECT N'Student deactivated: ' + i.StudentName
+ FROM inserted AS i JOIN deleted AS d ON i.StudentID = d.StudentID
+ WHERE d.IsActive = 1 AND i.IsActive = 0;
+END;
+GO
+UPDATE dbo.Students SET IsActive = 0 WHERE StudentID = 4;
+SELECT Message FROM dbo.ActivityLog ORDER BY LogID;
+DROP TRIGGER dbo.trg_Students_Deactivated;</code></pre><p>Expected: “Student deactivated: Dia”. The <code>WHERE</code> clause checks the old value (<code>d.IsActive = 1</code>) and the new value (<code>i.IsActive = 0</code>).</p>
+
+<h2>13. More AFTER DELETE examples</h2>
+<h3>Example 13.1 — Log a message for each removed student</h3><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_DeleteMessage
+ON dbo.Students AFTER DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.ActivityLog(Message)
+ SELECT N'Student removed: ' + StudentName FROM deleted;
+END;
+GO
+DELETE FROM dbo.Students WHERE StudentID = 3;
+SELECT Message FROM dbo.ActivityLog ORDER BY LogID;
+DROP TRIGGER dbo.trg_Students_DeleteMessage;</code></pre><p>Expected: “Student removed: Chen”. In a DELETE trigger, the removed rows are only available in <code>deleted</code>.</p>
+
+<h3>Example 13.2 — Copy deleted students to an archive</h3><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_Archive
+ON dbo.Students AFTER DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.StudentArchive(StudentID,StudentName,Credits)
+ SELECT StudentID, StudentName, Credits FROM deleted;
+END;
+GO
+DELETE FROM dbo.Students WHERE StudentID = 4;
+SELECT * FROM dbo.StudentArchive;
+DROP TRIGGER dbo.trg_Students_Archive;</code></pre><p>Expected: one archive row for Dia (10 credits). The student is gone from <code>Students</code> but the full record is kept.</p>
+
+<h3>Example 13.3 — Block deleting active students</h3><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_BlockActiveDelete
+ON dbo.Students AFTER DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1 FROM deleted WHERE IsActive = 1)
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50003, N'Active students cannot be deleted.', 1;
+ END
+END;
+GO
+DELETE FROM dbo.Students WHERE StudentID = 1;   -- fails: Ana is active
+GO
+SELECT * FROM dbo.Students;                      -- Ana is still there
+DROP TRIGGER dbo.trg_Students_BlockActiveDelete;</code></pre><p>Expected: <code>Msg 50003</code>; Ana remains. After the examples, <code>Students</code> contains only Ana (Ana Lopez, 25 credits).</p>
+
+<h2>14. Managing triggers</h2><pre><code>-- List the triggers on your tables
+SELECT name AS TriggerName, OBJECT_NAME(parent_id) AS TableName, is_disabled
+FROM sys.triggers WHERE parent_class = 1;
+
+-- View a trigger's code
+EXEC sp_helptext 'dbo.trg_Students_AfterInsert';
+
+-- Switch a trigger off and on again
+DISABLE TRIGGER dbo.trg_Students_AfterInsert ON dbo.Students;
+ENABLE  TRIGGER dbo.trg_Students_AfterInsert ON dbo.Students;
+
+-- Remove a trigger (dropping a table also drops its triggers)
+-- DROP TRIGGER IF EXISTS dbo.trg_Students_AfterInsert;</code></pre><p>In SSMS, table triggers appear under <em>Tables → dbo.Students → Triggers</em>.</p>
+
+<h2>15. Best practices and common mistakes</h2><table><tr><th>Do</th><th>Avoid</th></tr><tr><td>Start with <code>SET NOCOUNT ON</code>.</td><td>Extra “rows affected” messages that confuse applications.</td></tr><tr><td>Write set-based logic over <code>inserted</code>/<code>deleted</code>.</td><td>Variables or loops that process one row.</td></tr><tr><td>Join old and new rows on the primary key.</td><td>Allowing primary-key updates that break that join.</td></tr><tr><td>Log only real changes (<code>i.Col &lt;&gt; d.Col</code>).</td><td>Logging “changes” where nothing changed.</td></tr><tr><td>Keep triggers short and fast.</td><td>Slow work inside the trigger — it delays every data change.</td></tr><tr><td>Use <code>CHECK</code>, <code>FOREIGN KEY</code>, <code>DEFAULT</code> when they are enough.</td><td>Re-creating simple constraints as triggers.</td></tr><tr><td>Use <code>ROLLBACK</code> + <code>THROW</code> with a clear message.</td><td>Silently undoing work with no error.</td></tr><tr><td>Name triggers clearly: <code>trg_Table_Purpose</code>.</td><td>Generic names like <code>trigger1</code>.</td></tr></table>
+
+<h2>16. Check your understanding</h2><div class="exercise">1. Why does an AFTER trigger not need an explicit EXEC call?<br>2. For UPDATE, which pseudo-table holds the previous values?<br>3. What happens if one UPDATE statement affects 10 rows?<br>4. Why is an audit table useful?</div><details><summary>Show answers</summary><p><strong>1.</strong> The trigger is bound to a table and an event. SQL Server runs it automatically whenever that INSERT, UPDATE, or DELETE occurs on that table.<br><strong>2.</strong> <code>deleted</code> holds the old (before) values; <code>inserted</code> holds the new (after) values.<br><strong>3.</strong> The trigger fires <strong>once</strong>. Both <code>inserted</code> and <code>deleted</code> contain 10 rows, so the trigger must use set-based code to handle all of them.<br><strong>4.</strong> It keeps a permanent history of who changed what and when — supporting accountability, troubleshooting, recovery of old values, and compliance requirements.</p></details>
+
+<h2>17. Quiz</h2><p>Choose the best answer, then open the answer to check yourself.</p>
+<div class="exercise"><strong>Q1.</strong> When does an AFTER UPDATE trigger run?<br>A. Before the rows are changed<br>B. Instead of the UPDATE<br>C. After the rows are changed and constraints pass, before the transaction commits<br>D. After the transaction commits</div><details><summary>Show answer</summary><p><strong>C.</strong> The trigger runs inside the same transaction, which is why it can still roll the change back.</p></details>
+<div class="exercise"><strong>Q2.</strong> <code>CREATE TRIGGER … FOR INSERT</code> is the same as:<br>A. INSTEAD OF INSERT<br>B. AFTER INSERT<br>C. BEFORE INSERT<br>D. A DDL trigger</div><details><summary>Show answer</summary><p><strong>B.</strong> <code>FOR</code> is a synonym for <code>AFTER</code>. SQL Server has no BEFORE triggers.</p></details>
+<div class="exercise"><strong>Q3.</strong> In an AFTER INSERT trigger, the <code>inserted</code> table contains:<br>A. The new rows<br>B. All rows in the table<br>C. The old rows<br>D. Nothing</div><details><summary>Show answer</summary><p><strong>A.</strong> Only the rows added by the INSERT statement. <code>deleted</code> is empty.</p></details>
+<div class="exercise"><strong>Q4.</strong> During a DELETE trigger, the <code>inserted</code> table is:<br>A. Empty<br>B. The deleted rows<br>C. All rows still in the table<br>D. Not accessible — causes an error</div><details><summary>Show answer</summary><p><strong>A.</strong> A DELETE creates no new rows. The removed rows are in <code>deleted</code>.</p></details>
+<div class="exercise"><strong>Q5.</strong> In an AFTER UPDATE trigger, where are the <em>old</em> values?<br>A. inserted<br>B. deleted<br>C. StudentAudit<br>D. They are lost</div><details><summary>Show answer</summary><p><strong>B.</strong> <code>deleted</code> = before, <code>inserted</code> = after.</p></details>
+<div class="exercise"><strong>Q6.</strong> An UPDATE changes 50 rows. How many times does the AFTER UPDATE trigger fire?<br>A. 50<br>B. 1<br>C. 51<br>D. 0</div><details><summary>Show answer</summary><p><strong>B.</strong> Once per statement. <code>inserted</code> and <code>deleted</code> each contain 50 rows.</p></details>
+<div class="exercise"><strong>Q7.</strong> Can you create an AFTER trigger on a view?<br>A. Yes<br>B. Only AFTER DELETE<br>C. No — views support only INSTEAD OF triggers<br>D. Only if the view has one base table</div><details><summary>Show answer</summary><p><strong>C.</strong> AFTER triggers are for tables only.</p></details>
+<div class="exercise"><strong>Q8.</strong> <code>TRUNCATE TABLE dbo.Students</code> will:<br>A. Fire the AFTER DELETE trigger once<br>B. Fire it once per row<br>C. Not fire DELETE triggers<br>D. Fire the INSERT trigger</div><details><summary>Show answer</summary><p><strong>C.</strong> TRUNCATE does not fire DELETE triggers, so an audit trigger will not record it.</p></details>
+<div class="exercise"><strong>Q9.</strong> An INSERT violates a CHECK constraint. What happens to the AFTER INSERT trigger?<br>A. It runs and can fix the data<br>B. It runs, then the statement fails<br>C. It never runs, because the statement fails first<br>D. It runs twice</div><details><summary>Show answer</summary><p><strong>C.</strong> Constraints are checked before AFTER triggers run.</p></details>
+<div class="exercise"><strong>Q10.</strong> <code>UPDATE dbo.Students SET Credits = 0 WHERE StudentID = 999</code> matches no rows. The AFTER UPDATE trigger:<br>A. Does not fire<br>B. Fires with empty inserted and deleted<br>C. Fires with all rows<br>D. Raises an error</div><details><summary>Show answer</summary><p><strong>B.</strong> The trigger fires for the statement regardless of row count.</p></details>
+<div class="exercise"><strong>Q11.</strong> <code>ROLLBACK TRANSACTION</code> inside an AFTER trigger undoes:<br>A. Only the trigger's own inserts<br>B. Only the last row<br>C. The triggering statement and all other work in the same transaction<br>D. Nothing — triggers cannot roll back</div><details><summary>Show answer</summary><p><strong>C.</strong> In Example 11.2, the audit row written by the Section 6 trigger was undone too.</p></details>
+<div class="exercise"><strong>Q12.</strong> Why put <code>SET NOCOUNT ON</code> at the start of a trigger?<br>A. To make the trigger fire once<br>B. To stop extra “rows affected” messages being returned to the application<br>C. To disable the trigger<br>D. To hide errors</div><details><summary>Show answer</summary><p><strong>B.</strong> Some applications misread those extra row counts as the result of their own statement.</p></details>
+<div class="exercise"><strong>Q13.</strong> Which code is multi-row safe?<br>A. <code>SELECT @id = StudentID FROM inserted</code><br>B. <code>INSERT INTO Audit(StudentID) SELECT StudentID FROM inserted</code><br>C. <code>SET @id = (SELECT StudentID FROM inserted)</code><br>D. Reading <code>TOP 1</code> from inserted</div><details><summary>Show answer</summary><p><strong>B.</strong> A and D keep one row; C fails with “Subquery returned more than 1 value” when several rows are affected.</p></details>
+<div class="exercise"><strong>Q14.</strong> In an AFTER UPDATE trigger, how do you pair each old row with its new row?<br>A. <code>inserted UNION deleted</code><br>B. <code>inserted JOIN deleted ON primary key</code><br>C. <code>ORDER BY</code> on both tables<br>D. You cannot</div><details><summary>Show answer</summary><p><strong>B.</strong> Join on the primary key, as in Section 7 and Example 12.1.</p></details>
+<div class="exercise"><strong>Q15.</strong> Can a trigger run <code>UPDATE inserted SET Credits = 0</code>?<br>A. Yes<br>B. Only in AFTER triggers<br>C. No — inserted and deleted are read-only<br>D. Only for one row</div><details><summary>Show answer</summary><p><strong>C.</strong> You can read them, not change them.</p></details>
+<div class="exercise"><strong>Q16.</strong> The best way to enforce “Credits cannot be negative” on a single table is:<br>A. An AFTER trigger<br>B. A CHECK constraint<br>C. A LOGON trigger<br>D. A DDL trigger</div><details><summary>Show answer</summary><p><strong>B.</strong> Triggers are for history, old-vs-new comparisons (Example 12.2), and rules a constraint cannot express.</p></details>
+<div class="exercise"><strong>Q17.</strong> Which trigger type fires when someone runs <code>DROP TABLE</code>?<br>A. AFTER DELETE<br>B. DDL trigger<br>C. LOGON trigger<br>D. INSTEAD OF trigger</div><details><summary>Show answer</summary><p><strong>B.</strong> DROP TABLE changes structure, not data. A DELETE trigger fires only when rows are deleted.</p></details>
+<div class="exercise"><strong>Q18.</strong> A LOGON trigger fires when:<br>A. A row is inserted<br>B. A user connects to SQL Server<br>C. A table is created<br>D. A user logs off</div><details><summary>Show answer</summary><p><strong>B.</strong> It runs after the password is accepted and can refuse the connection.</p></details>
+<div class="exercise"><strong>Q19.</strong> Which catalog view lists triggers?<br>A. <code>sys.procedures</code><br>B. <code>sys.triggers</code><br>C. <code>sys.tables</code><br>D. <code>sys.events</code></div><details><summary>Show answer</summary><p><strong>B.</strong> See Section 14.</p></details>
+<div class="exercise"><strong>Q20.</strong> Which statement temporarily turns off a trigger without deleting it?<br>A. <code>DROP TRIGGER</code><br>B. <code>DISABLE TRIGGER</code><br>C. <code>ALTER TABLE … DROP</code><br>D. <code>STOP TRIGGER</code></div><details><summary>Show answer</summary><p><strong>B.</strong> Use <code>ENABLE TRIGGER</code> to switch it back on.</p></details>
+
+<h2>18. Practice problems with detailed solutions</h2><p>Try each problem before opening the solution. Each solution ends by dropping the trigger so problems stay independent. Run them in order — some tests use students added in earlier problems.</p>
+
+<div class="exercise"><strong>Problem 1 — AFTER INSERT: reject very short names.</strong> Reject any new student whose name is shorter than 2 characters.</div><details><summary>Show solution</summary><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_NameLength
+ON dbo.Students AFTER INSERT AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1 FROM inserted WHERE LEN(StudentName) &lt; 2)
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50010, N'Student name must have at least 2 characters.', 1;
+ END
+END;
+GO
+INSERT INTO dbo.Students(StudentID,StudentName,Credits) VALUES (10,N'A',5);    -- fails
+GO
+INSERT INTO dbo.Students(StudentID,StudentName,Credits) VALUES (10,N'Ali',5);  -- works
+DROP TRIGGER dbo.trg_Students_NameLength;</code></pre><p><strong>Explanation:</strong> the new rows are in <code>inserted</code>. <code>EXISTS</code> checks whether <em>any</em> of them breaks the rule; if so, the whole INSERT is cancelled.</p></details>
+
+<div class="exercise"><strong>Problem 2 — AFTER INSERT: log the starting credits.</strong> For each new student, write “New student &lt;name&gt; with &lt;credits&gt; credits” to <code>ActivityLog</code>.</div><details><summary>Show solution</summary><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_LogCredits
+ON dbo.Students AFTER INSERT AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.ActivityLog(Message)
+ SELECT CONCAT(N'New student ', StudentName, N' with ', Credits, N' credits')
+ FROM inserted;
+END;
+GO
+INSERT INTO dbo.Students(StudentID,StudentName,Credits) VALUES (11,N'Bo',12);
+SELECT Message FROM dbo.ActivityLog ORDER BY LogID;
+DROP TRIGGER dbo.trg_Students_LogCredits;</code></pre><p><strong>Explanation:</strong> <code>CONCAT</code> joins text and numbers without needing <code>CAST</code>. Expected message: “New student Bo with 12 credits”.</p></details>
+
+<div class="exercise"><strong>Problem 3 — AFTER UPDATE: log credit changes as a sentence.</strong> Write “Credits for &lt;name&gt; changed from &lt;old&gt; to &lt;new&gt;” whenever Credits changes.</div><details><summary>Show solution</summary><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_LogCreditChange
+ON dbo.Students AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.ActivityLog(Message)
+ SELECT CONCAT(N'Credits for ', i.StudentName, N' changed from ', d.Credits, N' to ', i.Credits)
+ FROM inserted AS i JOIN deleted AS d ON i.StudentID = d.StudentID
+ WHERE i.Credits &lt;&gt; d.Credits;
+END;
+GO
+UPDATE dbo.Students SET Credits = Credits + 5 WHERE StudentID = 11;
+SELECT Message FROM dbo.ActivityLog ORDER BY LogID;
+DROP TRIGGER dbo.trg_Students_LogCreditChange;</code></pre><p><strong>Explanation:</strong> old Credits come from <code>deleted</code>, new Credits from <code>inserted</code>, matched on StudentID. Expected: “Credits for Bo changed from 12 to 17”.</p></details>
+
+<div class="exercise"><strong>Problem 4 — AFTER UPDATE: maximum credits.</strong> Reject any update that sets Credits above 200.</div><details><summary>Show solution</summary><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_UpdateCreditLimit
+ON dbo.Students AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1 FROM inserted WHERE Credits &gt; 200)
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50011, N'Credits cannot be more than 200.', 1;
+ END
+END;
+GO
+UPDATE dbo.Students SET Credits = 300 WHERE StudentID = 11;   -- fails
+GO
+SELECT StudentID, Credits FROM dbo.Students WHERE StudentID = 11;   -- still 17
+DROP TRIGGER dbo.trg_Students_UpdateCreditLimit;</code></pre><p><strong>Explanation:</strong> only the new values matter, so <code>inserted</code> alone is enough — no join needed.</p></details>
+
+<div class="exercise"><strong>Problem 5 — AFTER UPDATE: protect the primary key.</strong> Prevent anyone from changing <code>StudentID</code>.</div><details><summary>Show solution</summary><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_NoKeyChange
+ON dbo.Students AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ IF UPDATE(StudentID)
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50012, N'StudentID cannot be changed.', 1;
+ END
+END;
+GO
+UPDATE dbo.Students SET StudentID = 99 WHERE StudentID = 11;   -- fails
+GO
+DROP TRIGGER dbo.trg_Students_NoKeyChange;</code></pre><p><strong>Explanation:</strong> <code>UPDATE(StudentID)</code> is TRUE when the column appears in the SET list. Protecting the key matters because update triggers join <code>inserted</code> to <code>deleted</code> on StudentID — if the key changes, old and new rows no longer match.</p></details>
+
+<div class="exercise"><strong>Problem 6 — AFTER DELETE: record who deleted a student.</strong> Write “Student &lt;name&gt; deleted by &lt;login&gt;” to <code>ActivityLog</code>.</div><details><summary>Show solution</summary><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_LogDeleter
+ON dbo.Students AFTER DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.ActivityLog(Message)
+ SELECT CONCAT(N'Student ', StudentName, N' deleted by ', SUSER_SNAME())
+ FROM deleted;
+END;
+GO
+DELETE FROM dbo.Students WHERE StudentID = 10;
+SELECT Message FROM dbo.ActivityLog ORDER BY LogID;
+DROP TRIGGER dbo.trg_Students_LogDeleter;</code></pre><p><strong>Explanation:</strong> <code>SUSER_SNAME()</code> returns the login running the statement. Expected: “Student Ali deleted by &lt;your login&gt;”.</p></details>
+
+<div class="exercise"><strong>Problem 7 — AFTER DELETE: protect high-credit students.</strong> Block deleting any student with more than 100 credits.</div><details><summary>Show solution</summary><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_ProtectHighCredits
+ON dbo.Students AFTER DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1 FROM deleted WHERE Credits &gt; 100)
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50013, N'Students with more than 100 credits cannot be deleted.', 1;
+ END
+END;
+GO
+INSERT INTO dbo.Students(StudentID,StudentName,Credits) VALUES (12,N'Cy',150);
+DELETE FROM dbo.Students WHERE StudentID = 12;   -- fails
+GO
+SELECT * FROM dbo.Students WHERE StudentID = 12;  -- Cy is still there
+DROP TRIGGER dbo.trg_Students_ProtectHighCredits;</code></pre><p><strong>Explanation:</strong> the rows being removed are in <code>deleted</code>. If any of them has more than 100 credits, the DELETE is cancelled and Cy stays.</p></details>
+
+<div class="exercise"><strong>Problem 8 — AFTER DELETE: one student at a time.</strong> Allow a DELETE statement to remove at most one student.</div><details><summary>Show solution</summary><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_OneAtATime
+ON dbo.Students AFTER DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ IF (SELECT COUNT(*) FROM deleted) &gt; 1
+ BEGIN
+  ROLLBACK TRANSACTION;
+  THROW 50014, N'Delete one student at a time.', 1;
+ END
+END;
+GO
+DELETE FROM dbo.Students WHERE StudentID IN (11,12);   -- 2 rows: fails
+GO
+DROP TRIGGER dbo.trg_Students_OneAtATime;</code></pre><p><strong>Explanation:</strong> because the trigger fires once per statement, <code>COUNT(*)</code> on <code>deleted</code> tells you how many rows the statement removed. This protects against a DELETE with a missing or wrong <code>WHERE</code> clause.</p></details>
+
+<div class="exercise"><strong>Problem 9 — Debug a broken trigger.</strong> List the problems in this trigger and rewrite it correctly.<pre><code>CREATE TRIGGER dbo.trg_Bad ON dbo.Students AFTER UPDATE AS
+BEGIN
+ DECLARE @id INT, @old INT, @new INT;
+ SELECT @id = StudentID, @new = Credits FROM inserted;
+ SELECT @old = Credits FROM deleted;
+ INSERT INTO dbo.StudentAudit(StudentID,ActionType,OldCredits,NewCredits)
+ VALUES (@id,'UPDATE',@old,@new);
+END;</code></pre></div><details><summary>Show solution</summary><p><strong>Problems:</strong></p><ol><li><strong>Handles only one row:</strong> with 10 updated rows, only one audit row is written.</li><li><strong>Old and new values may not match:</strong> <code>@new</code> and <code>@old</code> come from two separate SELECTs with no join, so they may belong to different students.</li><li><strong>Fails when no rows match:</strong> <code>@id</code> is NULL, and inserting NULL into the NOT NULL StudentID column raises an error that cancels the user's UPDATE.</li><li><strong>Logs non-changes:</strong> an update to StudentName still writes a Credits “change”.</li><li><strong>No <code>SET NOCOUNT ON</code>.</strong></li></ol><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Bad ON dbo.Students AFTER UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ INSERT INTO dbo.StudentAudit(StudentID,ActionType,OldCredits,NewCredits)
+ SELECT i.StudentID,'UPDATE',d.Credits,i.Credits
+ FROM inserted AS i JOIN deleted AS d ON i.StudentID = d.StudentID
+ WHERE i.Credits &lt;&gt; d.Credits;
+END;
+GO
+DROP TRIGGER dbo.trg_Bad;   -- it duplicates Section 7, so remove it</code></pre><p><strong>Explanation:</strong> the corrected version is the pattern from Section 7: one set-based INSERT…SELECT, a join on the key, and a filter for real changes.</p></details>
+
+<div class="exercise"><strong>Problem 10 — Predict the audit rows.</strong> Only the three triggers from Sections 6–8 exist. How many rows does this script add to <code>StudentAudit</code>, and of which types?<pre><code>INSERT INTO dbo.Students(StudentID,StudentName,Credits) VALUES (20,N'Dee',30),(21,N'Raj',40);
+UPDATE dbo.Students SET Credits = Credits + 10 WHERE StudentID IN (20,21);
+UPDATE dbo.Students SET StudentName = N'Raj K' WHERE StudentID = 21;
+DELETE FROM dbo.Students WHERE StudentID = 20;</code></pre></div><details><summary>Show solution</summary><table><tr><th>Statement</th><th>Audit rows</th><th>Why</th></tr><tr><td>INSERT 2 rows</td><td>2 × INSERT</td><td>One per row in <code>inserted</code></td></tr><tr><td>UPDATE Credits for 2 students</td><td>2 × UPDATE</td><td>Credits changed for both (30→40, 40→50)</td></tr><tr><td>UPDATE name only</td><td>0</td><td>The Section 7 trigger fires, but <code>WHERE i.Credits &lt;&gt; d.Credits</code> filters it out</td></tr><tr><td>DELETE 1 row</td><td>1 × DELETE</td><td>Dee, OldCredits 40</td></tr></table><p><strong>Answer:</strong> 5 new audit rows. Run the script and check with <code>SELECT * FROM dbo.StudentAudit ORDER BY AuditID;</code></p></details>
+
+<h2>19. Cleanup (optional)</h2><p>Run this when you are finished. It removes everything created in this tutorial. (Re-running the setup in Section 5 also works.)</p><pre><code>DROP TABLE IF EXISTS dbo.ActivityLog, dbo.StudentArchive, dbo.StudentAudit, dbo.Students;
+-- dropping a table also drops its triggers</code></pre>
+<p class="note">Next week: INSTEAD OF triggers. Complete the separate Part A assignment after this tutorial.</p></body></html>
