@@ -1,0 +1,115 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SQL Server Triggers — Part A Assignment: AFTER Triggers</title><style>body{font:16px/1.65 system-ui,Arial;max-width:950px;margin:35px auto;padding:0 22px;color:#202b39}h1,h2,h3{color:#173b62}h1{border-bottom:3px solid #327bb3;padding-bottom:12px}section{margin:25px 0}pre{background:#f1f5f9;padding:17px;overflow:auto;border-left:4px solid #327bb3;white-space:pre}code{font-family:Consolas,monospace}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bac8d6;padding:9px;text-align:left}th{background:#e9f1f8}.note{background:#eef7ff;padding:14px;border-radius:8px}.exercise{border:1px solid #cad5e0;border-radius:8px;padding:14px;margin:14px 0}details{padding:10px;background:#f3f6fa;margin:10px 0}footer{margin-top:45px;color:#667}</style></head><body><h1>SQL Server Triggers — Part A Assignment: AFTER Triggers</h1><p class="note"><strong>Goal:</strong> Apply what you learned in the Part A tutorial by writing AFTER INSERT, AFTER UPDATE, and AFTER DELETE triggers for a small library database. You will audit changes, log messages, enforce business rules with <code>ROLLBACK</code> + <code>THROW</code>, fix a broken trigger, and predict trigger results.<br><strong>Total:</strong> 20 points.</p>
+
+<h2>1. Instructions</h2><ol><li>Work in a <strong>practice database</strong> in SSMS.</li><li>Complete the tasks <strong>in order</strong>. Later tasks depend on the data left by earlier ones.</li><li>For every task, write your trigger, then run the <strong>test script given in the task exactly as written</strong>.</li><li>Tasks 1–3 create triggers that <strong>stay in place</strong>. In Tasks 4–9, <strong>drop your trigger after testing</strong>, as the task tells you.</li><li>A test statement that is expected to fail is followed by <code>GO</code>. An error in a trigger stops the rest of the batch.</li><li>Every trigger must start with <code>SET NOCOUNT ON</code> and must work correctly when a statement affects <strong>many rows</strong>.</li></ol>
+
+<h2>2. What to submit</h2><table><tr><th>Item</th><th>Details</th></tr><tr><td>SQL script</td><td>One file named <code>Lastname_Firstname_TriggersA.sql</code>. Include all your code. Label each task with a comment, e.g. <code>-- Task 4</code>.</td></tr><tr><td>Written answers</td><td>Answer Part A and Tasks 9–10 as comments in the script (<code>/* … */</code>).</td></tr><tr><td>Screenshots</td><td>Take a screenshot of the results or messages wherever a task says <strong>📷 Screenshot</strong>. Paste them into one Word or PDF file, labeled by task number.</td></tr></table>
+
+<h2>3. Database setup</h2><p>Run this script first. <strong>Warning:</strong> it drops existing tables with these names.</p><pre><code>DROP TABLE IF EXISTS dbo.BookArchive, dbo.LibraryLog, dbo.BookAudit, dbo.Books;
+GO
+CREATE TABLE dbo.Books (
+ BookID INT PRIMARY KEY,
+ Title NVARCHAR(100) NOT NULL,
+ Author NVARCHAR(80) NOT NULL,
+ Copies INT NOT NULL,
+ IsActive BIT NOT NULL DEFAULT 1
+);
+CREATE TABLE dbo.BookAudit (
+ AuditID INT IDENTITY(1,1) PRIMARY KEY,
+ BookID INT NOT NULL,
+ ActionType VARCHAR(10) NOT NULL,
+ OldCopies INT NULL, NewCopies INT NULL,
+ ChangedBy SYSNAME NOT NULL DEFAULT SUSER_SNAME(),
+ ChangedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+);
+CREATE TABLE dbo.LibraryLog (
+ LogID INT IDENTITY(1,1) PRIMARY KEY,
+ Message NVARCHAR(200) NOT NULL,
+ LoggedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+);
+CREATE TABLE dbo.BookArchive (
+ BookID INT NOT NULL, Title NVARCHAR(100) NOT NULL,
+ Author NVARCHAR(80) NOT NULL, Copies INT NOT NULL,
+ DeletedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+);
+GO</code></pre>
+
+<h2>Part A — Concept questions (2.5 points, 0.5 point each)</h2><div class="exercise">A1. How is an AFTER trigger started, and how is that different from how a stored procedure is started?<br><br>A2. In an AFTER UPDATE trigger, what does the <code>inserted</code> table contain, and what does the <code>deleted</code> table contain?<br><br>A3. A single DELETE statement removes 4 books. How many times does an AFTER DELETE trigger fire, and how many rows are in <code>deleted</code>? Why does this matter when you write the trigger?<br><br>A4. In one or two sentences each, explain what a DDL trigger and a LOGON trigger are.<br><br>A5. Task 4 below asks you to block new books with fewer than 1 copy by using a trigger. Name a simpler database feature that could enforce this rule, and give one kind of rule that <em>needs</em> a trigger instead.</div>
+
+<h2>Part B — Audit triggers that stay in place (6 points)</h2>
+<div class="exercise"><strong>Task 1 — AFTER INSERT audit (2 points).</strong> Create <code>dbo.trg_Books_AfterInsert</code>. For every new book, add a row to <code>BookAudit</code> with ActionType <code>'INSERT'</code>, OldCopies <code>NULL</code>, and NewCopies equal to the book's Copies.<pre><code>-- Test
+INSERT INTO dbo.Books(BookID,Title,Author,Copies) VALUES
+ (1,N'Database Systems',N'Elmasri',3),
+ (2,N'Clean Code',N'Martin',5),
+ (3,N'Python Crash Course',N'Matthes',4);
+SELECT BookID,ActionType,OldCopies,NewCopies FROM dbo.BookAudit ORDER BY AuditID;</code></pre>📷 Screenshot the audit results.</div>
+
+<div class="exercise"><strong>Task 2 — AFTER UPDATE audit (2 points).</strong> Create <code>dbo.trg_Books_AfterUpdate</code>. When Copies changes, add a row with ActionType <code>'UPDATE'</code>, the old Copies, and the new Copies. Do <strong>not</strong> add a row when Copies did not change.<pre><code>-- Test
+UPDATE dbo.Books SET Copies = Copies + 2 WHERE BookID IN (1,2);
+UPDATE dbo.Books SET Author = N'R. Martin' WHERE BookID = 2;   -- Copies not changed
+SELECT BookID,ActionType,OldCopies,NewCopies FROM dbo.BookAudit ORDER BY AuditID;</code></pre>📷 Screenshot the audit results.</div>
+
+<div class="exercise"><strong>Task 3 — AFTER DELETE audit (2 points).</strong> Create <code>dbo.trg_Books_AfterDelete</code>. For every deleted book, add a row with ActionType <code>'DELETE'</code>, OldCopies equal to the deleted Copies, and NewCopies <code>NULL</code>.<pre><code>-- Test
+INSERT INTO dbo.Books(BookID,Title,Author,Copies) VALUES (4,N'Old Manual',N'Unknown',1);
+DELETE FROM dbo.Books WHERE BookID = 4;
+SELECT BookID,ActionType,OldCopies,NewCopies FROM dbo.BookAudit ORDER BY AuditID;</code></pre>📷 Screenshot the audit results.</div>
+
+<h2>Part C — Business-rule and logging triggers (7.5 points, 1.5 points each)</h2><p>Each of these triggers is tested and then dropped.</p>
+
+<div class="exercise"><strong>Task 4 — AFTER INSERT: at least one copy.</strong> Create <code>dbo.trg_Books_MinCopies</code>. If any new book has fewer than 1 copy, roll back the INSERT and raise error <code>50001</code> with the message <em>A new book must have at least 1 copy.</em><pre><code>-- Test
+INSERT INTO dbo.Books(BookID,Title,Author,Copies) VALUES (5,N'Empty Book',N'Nobody',0);  -- should fail
+GO
+INSERT INTO dbo.Books(BookID,Title,Author,Copies) VALUES (5,N'Learning SQL',N'Beaulieu',2); -- should work
+SELECT * FROM dbo.Books;
+DROP TRIGGER dbo.trg_Books_MinCopies;</code></pre>📷 Screenshot the error message and the Books table.</div>
+
+<div class="exercise"><strong>Task 5 — AFTER UPDATE: log title changes.</strong> Create <code>dbo.trg_Books_TitleChange</code>. When a title changes, write this message to <code>LibraryLog</code>: <em>Title changed from &lt;old title&gt; to &lt;new title&gt;</em>. Write nothing if the title did not change.<pre><code>-- Test
+UPDATE dbo.Books SET Title = N'Fundamentals of Database Systems' WHERE BookID = 1;
+UPDATE dbo.Books SET Title = Title WHERE BookID = 2;   -- same title: no message
+SELECT Message FROM dbo.LibraryLog ORDER BY LogID;
+DROP TRIGGER dbo.trg_Books_TitleChange;</code></pre>📷 Screenshot the LibraryLog results.</div>
+
+<div class="exercise"><strong>Task 6 — AFTER UPDATE: limit large reductions.</strong> Create <code>dbo.trg_Books_LimitReduction</code>. One UPDATE may not reduce a book's Copies by <strong>more than 5</strong>. If it does, roll back and raise error <code>50002</code> with the message <em>Copies cannot be reduced by more than 5 at once.</em><br><em>Hint:</em> you need both the old and the new value.<pre><code>-- Test
+UPDATE dbo.Books SET Copies = Copies - 6 WHERE BookID = 2;   -- should fail
+GO
+UPDATE dbo.Books SET Copies = Copies - 2 WHERE BookID = 2;   -- should work
+SELECT BookID,Copies FROM dbo.Books WHERE BookID = 2;
+DROP TRIGGER dbo.trg_Books_LimitReduction;</code></pre>📷 Screenshot the error message and the final Copies value.</div>
+
+<div class="exercise"><strong>Task 7 — AFTER DELETE: archive deleted books.</strong> Create <code>dbo.trg_Books_Archive</code>. Copy every deleted book (BookID, Title, Author, Copies) into <code>BookArchive</code>.<pre><code>-- Test
+DELETE FROM dbo.Books WHERE BookID = 5;
+SELECT * FROM dbo.BookArchive;
+DROP TRIGGER dbo.trg_Books_Archive;</code></pre>📷 Screenshot the BookArchive results.</div>
+
+<div class="exercise"><strong>Task 8 — AFTER DELETE: block deleting active books.</strong> Create <code>dbo.trg_Books_BlockActiveDelete</code>. If any deleted book has <code>IsActive = 1</code>, roll back and raise error <code>50003</code> with the message <em>Active books cannot be deleted. Deactivate them first.</em><pre><code>-- Test
+DELETE FROM dbo.Books WHERE BookID = 3;   -- should fail (book is active)
+GO
+UPDATE dbo.Books SET IsActive = 0 WHERE BookID = 3;
+DELETE FROM dbo.Books WHERE BookID = 3;   -- should work now
+SELECT * FROM dbo.Books;
+DROP TRIGGER dbo.trg_Books_BlockActiveDelete;</code></pre>📷 Screenshot the error message and the Books table.</div>
+
+<h2>Part D — Debug and predict (4 points)</h2>
+<div class="exercise"><strong>Task 9 — Fix a broken trigger (2 points).</strong> A teammate wrote this trigger. <strong>Do not create it as written.</strong><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Books_NewBookLog
+ON dbo.Books AFTER INSERT AS
+BEGIN
+ DECLARE @title NVARCHAR(100);
+ SELECT @title = Title FROM inserted;
+ INSERT INTO dbo.LibraryLog(Message) VALUES (N'New book: ' + @title);
+END;</code></pre><ol type="a"><li>In a comment, list at least <strong>three</strong> problems with this trigger. Think about multi-row inserts, inserts that affect zero rows, and best practices. (1 point)</li><li>Write a corrected version with the same name. (0.5 point)</li><li>Run the test below. (0.5 point)</li></ol><pre><code>-- Test
+INSERT INTO dbo.Books(BookID,Title,Author,Copies) VALUES
+ (6,N'Head First SQL',N'Beighley',2),
+ (7,N'SQL Cookbook',N'Molinaro',3);
+SELECT Message FROM dbo.LibraryLog ORDER BY LogID;
+DROP TRIGGER dbo.trg_Books_NewBookLog;</code></pre>📷 Screenshot the LibraryLog results.</div>
+
+<div class="exercise"><strong>Task 10 — Predict, then verify (2 points).</strong> At this point, only your Task 1–3 triggers should exist. <strong>Before running</strong> the script below, write your prediction as a comment: how many rows will be added to <code>BookAudit</code>, and of which types (INSERT / UPDATE / DELETE)? Explain each statement in one line. Then run it and compare.<pre><code>INSERT INTO dbo.Books(BookID,Title,Author,Copies) VALUES
+ (10,N'Book A',N'Author A',2),(11,N'Book B',N'Author B',3);
+UPDATE dbo.Books SET Copies = Copies + 1 WHERE BookID IN (10,11);
+UPDATE dbo.Books SET Copies = Copies WHERE BookID = 10;
+DELETE FROM dbo.Books WHERE BookID IN (10,11);
+SELECT BookID,ActionType,OldCopies,NewCopies FROM dbo.BookAudit ORDER BY AuditID;</code></pre>📷 Screenshot the final BookAudit results.<br>Points: prediction and explanation 1, correct verification 1. If your prediction was wrong, explain why — an honest explanation earns full credit for that part.</div>
+
+<h2>4. Final check</h2><p>Run this and confirm that only your three Task 1–3 triggers remain. Include the result in your screenshots.</p><pre><code>SELECT name AS TriggerName, OBJECT_NAME(parent_id) AS TableName
+FROM sys.triggers WHERE parent_class = 1 AND OBJECT_NAME(parent_id) = 'Books';</code></pre>
+
+<h2>5. Grading rubric</h2><table><tr><th>Part</th><th>Points</th><th>Full credit requires</th></tr><tr><td>A — Concept questions</td><td>2.5</td><td>Accurate, complete answers in your own words.</td></tr><tr><td>B — Tasks 1–3</td><td>6</td><td>Correct audit rows; set-based code (handles many rows); <code>SET NOCOUNT ON</code>; Task 2 skips unchanged Copies.</td></tr><tr><td>C — Tasks 4–8</td><td>7.5</td><td>Correct use of <code>inserted</code>/<code>deleted</code>; rule triggers use <code>ROLLBACK</code> + <code>THROW</code> with the given error number and message; trigger dropped after testing.</td></tr><tr><td>D — Tasks 9–10</td><td>4</td><td>At least three valid problems identified with a working set-based fix; reasoned prediction with verification.</td></tr><tr><td><strong>Total</strong></td><td><strong>20</strong></td><td>Deductions: missing screenshots (−0.5 each), file not named as required (−0.5), triggers that work for one row only (up to −50% on that task).</td></tr></table><p class="note">Academic integrity: the tutorial is your reference, but write the code yourself. Triggers copied from the tutorial without being adapted to the Books tables will not work and will not earn credit.</p></body></html>
