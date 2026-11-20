@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SQL Server Triggers — Part B: INSTEAD OF Triggers</title><style>body{font:16px/1.65 system-ui,Arial;max-width:950px;margin:35px auto;padding:0 22px;color:#202b39}h1,h2,h3{color:#173b62}h1{border-bottom:3px solid #327bb3;padding-bottom:12px}section{margin:25px 0}pre{background:#f1f5f9;padding:17px;overflow:auto;border-left:4px solid #327bb3;white-space:pre}code{font-family:Consolas,monospace}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bac8d6;padding:9px;text-align:left}th{background:#e9f1f8}.note{background:#eef7ff;padding:14px;border-radius:8px}.exercise{border:1px solid #cad5e0;border-radius:8px;padding:14px;margin:14px 0}details{padding:10px;background:#f3f6fa;margin:10px 0}footer{margin-top:45px;color:#667}</style></head><body><h1>SQL Server Triggers — Part B: INSTEAD OF Triggers</h1><p class="note"><strong>Learning goals:</strong> Explain how INSTEAD OF triggers replace an attempted DML action, use both magic tables, and implement simple validation and soft deletion.</p><h2>1. AFTER vs INSTEAD OF</h2><table><tr><th>AFTER</th><th>INSTEAD OF</th></tr><tr><td>Runs after a successful statement's data change (before transaction commit)</td><td>Runs in place of the attempted data change</td></tr><tr><td>Often used for auditing</td><td>Often used to validate, redirect, or replace an action</td></tr></table><p>An INSTEAD OF trigger does <strong>not</strong> automatically perform the original operation. The trigger must explicitly carry out the desired action. It fires once per statement, even for multiple rows.</p><h2>2. Magic tables</h2><p>For INSERT, <code>inserted</code> contains attempted new rows. For UPDATE, <code>deleted</code> has old values and <code>inserted</code> has proposed new values. For DELETE, <code>deleted</code> contains rows targeted for deletion.</p><h2>3. Lab setup</h2><p>Use a practice database. This resets the sample tables, so run it separately from Part A if you want to preserve Part A results.</p><pre><code>IF OBJECT_ID(&#x27;dbo.StudentAudit&#x27;,&#x27;U&#x27;) IS NOT NULL DROP TABLE dbo.StudentAudit;
+IF OBJECT_ID(&#x27;dbo.Students&#x27;,&#x27;U&#x27;) IS NOT NULL DROP TABLE dbo.Students;
+GO
+CREATE TABLE dbo.Students (
+ StudentID INT PRIMARY KEY, StudentName NVARCHAR(80) NOT NULL,
+ Credits INT NOT NULL, IsActive BIT NOT NULL DEFAULT 1
+);
+CREATE TABLE dbo.StudentAudit (
+ AuditID INT IDENTITY(1,1) PRIMARY KEY,
+ StudentID INT NOT NULL, ActionType VARCHAR(10) NOT NULL,
+ OldCredits INT NULL, NewCredits INT NULL,
+ ChangedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+);
+GO</code></pre><h2>4. INSTEAD OF INSERT: validate first</h2><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_InsteadInsert
+ON dbo.Students INSTEAD OF INSERT AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1 FROM inserted WHERE Credits &lt; 0)
+  THROW 50001,&#x27;Credits cannot be negative.&#x27;,1;
+ INSERT INTO dbo.Students(StudentID,StudentName,Credits,IsActive)
+ SELECT StudentID,StudentName,Credits,IsActive FROM inserted;
+END;
+GO</code></pre><pre><code>INSERT INTO dbo.Students(StudentID,StudentName,Credits)
+VALUES (1,N&#x27;Ana&#x27;,20),(2,N&#x27;Ben&#x27;,35);
+SELECT * FROM dbo.Students;
+-- Run separately to observe the error:
+INSERT INTO dbo.Students(StudentID,StudentName,Credits)
+VALUES (3,N&#x27;Cara&#x27;,-2);</code></pre><p>Expected: Ana and Ben are inserted. Cara is rejected with an error. The trigger performs the valid insert itself.</p><h2>5. INSTEAD OF UPDATE: reject invalid proposed values</h2><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_InsteadUpdate
+ON dbo.Students INSTEAD OF UPDATE AS
+BEGIN
+ SET NOCOUNT ON;
+ IF EXISTS (SELECT 1 FROM inserted WHERE Credits &lt; 0)
+  THROW 50002,&#x27;Credits cannot be negative.&#x27;,1;
+ UPDATE s SET s.StudentName=i.StudentName,
+  s.Credits=i.Credits, s.IsActive=i.IsActive
+ FROM dbo.Students AS s JOIN inserted AS i ON s.StudentID=i.StudentID;
+END;
+GO</code></pre><pre><code>UPDATE dbo.Students SET Credits=Credits+3 WHERE StudentID=1;
+SELECT StudentID,Credits FROM dbo.Students;
+-- Run separately to observe the error:
+UPDATE dbo.Students SET Credits=-10 WHERE StudentID=2;</code></pre><p>Expected: Ana's credits become 23; Ben's attempted negative update is rejected. For simplicity, this exercise does not allow changes to StudentID.</p><h2>6. INSTEAD OF DELETE: soft delete</h2><pre><code>CREATE OR ALTER TRIGGER dbo.trg_Students_InsteadDelete
+ON dbo.Students INSTEAD OF DELETE AS
+BEGIN
+ SET NOCOUNT ON;
+ UPDATE s SET IsActive=0
+ FROM dbo.Students AS s JOIN deleted AS d ON s.StudentID=d.StudentID;
+END;
+GO</code></pre><pre><code>DELETE FROM dbo.Students WHERE StudentID=2;
+SELECT StudentID,StudentName,IsActive FROM dbo.Students;</code></pre><p>Expected: Ben still exists, but IsActive becomes 0. The DELETE statement was replaced by an UPDATE.</p><h2>7. Important notes</h2><p>SQL Server has restrictions on INSTEAD OF triggers (for example, an INSTEAD OF DELETE trigger cannot be defined on a table that is a target of a cascading DELETE foreign-key action). Trigger code should handle sets, not assume one row. Avoid writing to the same table without understanding recursion and nested-trigger behavior.</p><h2>8. Quick checks</h2><div class="exercise">1. Why does an INSTEAD OF trigger need to explicitly insert valid rows?<br>2. Which magic table exposes the old values for an UPDATE?<br>3. Why might an application use soft deletion?<br>4. Does a multi-row DELETE execute the trigger once or once per row?</div><p class="note">Complete the separate Part B assignment after this tutorial.</p></body></html>
